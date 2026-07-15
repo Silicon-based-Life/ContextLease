@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ContextLease · Live Context Debugger</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="ContextLease home">
+      <span class="brand-mark" aria-hidden="true">CL</span>
+      <span><strong>ContextLease</strong><small>Live context debugger</small></span>
+    </a>
+    <div class="controls">
+      <label>Arena<select id="arena-select" aria-label="Arena"><option>Loading…</option></select></label>
+      <button id="live-toggle" type="button" aria-pressed="true">● Live</button>
+      <span id="connection" class="status pending" role="status">Connecting</span>
+    </div>
+  </header>
+
+  <main id="main" aria-busy="true">
+    <section class="overview" aria-labelledby="overview-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">CURRENT SNAPSHOT</p><h1 id="overview-heading">Context occupancy</h1></div>
+        <p id="snapshot-meta" class="meta">Waiting for an arena snapshot…</p>
+      </div>
+      <div class="budget-track" aria-label="Context budget distribution">
+        <span id="budget-used" class="budget-part used"></span>
+        <span id="budget-slack" class="budget-part slack"></span>
+        <span id="budget-framework" class="budget-part framework"></span>
+        <span id="budget-output" class="budget-part output"></span>
+      </div>
+      <div class="budget-legend" aria-hidden="true">
+        <span><i class="used"></i>Used</span><span><i class="slack"></i>Slack</span>
+        <span><i class="framework"></i>Framework reserve</span><span><i class="output"></i>Output reserve</span>
+      </div>
+      <dl class="kpis">
+        <div><dt>Used</dt><dd id="kpi-used">—</dd></div>
+        <div><dt>Utilization</dt><dd id="kpi-utilization">—</dd></div>
+        <div><dt>Reclaimable</dt><dd id="kpi-reclaimable">—</dd></div>
+        <div><dt>Active leases</dt><dd id="kpi-leases">—</dd></div>
+        <div><dt>Pressure</dt><dd id="kpi-pressure">—</dd></div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="distribution-heading">
+      <div class="section-heading"><div><p class="eyebrow">MODULE MAP</p><h2 id="distribution-heading">Who owns the tokens?</h2></div><p class="meta">Size = used tokens · stripe = reclaimable</p></div>
+      <div id="module-map" class="module-map" role="list"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Module</th><th>Floor / Target / Max</th><th>Demand</th><th>Used</th><th>Borrowed</th><th>Fixed / Variable</th><th>Pinned / Elastic</th><th>Pressure</th></tr></thead>
+          <tbody id="module-rows"><tr><td colspan="8" class="empty">No module data</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="two-column" aria-label="Trends and decisions">
+      <article aria-labelledby="trend-heading">
+        <div class="section-heading"><div><p class="eyebrow">LAST 60 SAMPLES</p><h2 id="trend-heading">Occupancy trend</h2></div></div>
+        <svg id="trend" class="trend" viewBox="0 0 720 220" role="img" aria-label="Token usage trend">
+          <path class="grid" d="M0 55H720 M0 110H720 M0 165H720"></path>
+          <polyline id="trend-line" points="" vector-effect="non-scaling-stroke"></polyline>
+        </svg>
+      </article>
+      <article aria-labelledby="events-heading">
+        <div class="section-heading"><div><p class="eyebrow">DECISION TRACE</p><h2 id="events-heading">Recent events</h2></div><span id="event-count" class="meta">0</span></div>
+        <ol id="event-list" class="event-list"><li class="empty">No events yet</li></ol>
+      </article>
+    </section>
+
+    <section aria-labelledby="leases-heading">
+      <div class="section-heading"><div><p class="eyebrow">REVOCABLE CAPACITY</p><h2 id="leases-heading">Lease ledger</h2></div></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Donor</th><th>Borrower</th><th>Granted</th><th>Used</th><th>Reclaimable</th><th>Release pipeline</th><th>State</th></tr></thead>
+        <tbody id="lease-rows"><tr><td colspan="7" class="empty">No active leases</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section id="empty-state" class="empty-state" hidden>
+      <h2>No live arenas</h2><p>Prepare a context with an ObservationStore, then refresh this page.</p>
+    </section>
+  </main>
+  <footer><span>ContextLease 0.1</span><span>Read-only · prompt bodies hidden by default</span></footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>

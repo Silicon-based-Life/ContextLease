@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ContextLease — Dynamic LLM Context Budgeting & Prompt Compression</title>
+  <meta name="description" content="Open-source Python framework for LLM context management, prompt compression, revocable token leases, LiteLLM and OpenAI-compatible summaries, and real-time observability.">
+  <meta name="keywords" content="LLM context management,prompt compression,token budgeting,AI agents,context window,prompt management,LiteLLM,LLM observability">
+  <meta name="theme-color" content="#07111f">
+  <meta property="og:title" content="ContextLease — Give every prompt token a job">
+  <meta property="og:description" content="Budget, borrow, reclaim, compress, and observe LLM context with a provider-neutral Python framework.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="site.css">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"ContextLease","description":"Dynamic LLM context budgeting, prompt compression, and observability","programmingLanguage":"Python","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/yuexiong/contextlease","keywords":"LLM context management, prompt compression, token budgeting, AI agents"}
+  </script>
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="nav shell" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="ContextLease home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>ContextLease</span>
+      </a>
+      <div class="nav-links">
+        <a href="#how">How it works</a>
+        <a href="#providers">Providers</a>
+        <a href="#observability">Debug Web</a>
+        <a class="button compact secondary" href="https://github.com/yuexiong/contextlease">GitHub</a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero shell" id="top">
+      <div class="hero-copy">
+        <p class="eyebrow">OPEN-SOURCE · PROVIDER-NEUTRAL · DEPENDENCY-FREE CORE</p>
+        <h1>Give every prompt token <span>a job.</span></h1>
+        <p class="lede">ContextLease manages an agent's context window like a resource allocator: protect critical modules, lend idle capacity, reclaim it safely, and compress only through registered release plans.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/yuexiong/contextlease">View on GitHub <span aria-hidden="true">→</span></a>
+          <button class="button secondary copy-command" type="button" data-command="pip install git+https://github.com/yuexiong/contextlease.git"><code>pip install from GitHub</code><span class="copy-label">Copy</span></button>
+        </div>
+        <ul class="proof" aria-label="Project guarantees">
+          <li><strong>14</strong> compression algorithms</li>
+          <li><strong>0</strong> required dependencies</li>
+          <li><strong>REST + SSE</strong> live telemetry</li>
+        </ul>
+      </div>
+      <div class="allocator-demo" aria-label="Interactive token allocation example">
+        <div class="demo-head">
+          <div><span class="status-dot"></span> allocation.live</div>
+          <output id="budget-readout">6,144 / 8,192</output>
+        </div>
+        <div class="budget-track" aria-hidden="true">
+          <span class="system-segment"></span><span class="memory-segment"></span><span class="history-segment"></span><span class="slack-segment"></span>
+        </div>
+        <div class="module-row protected">
+          <div><b>system</b><span>pinned</span></div>
+          <strong>1,024</strong>
+          <div class="micro-bar"><i style="--width:100%"></i></div>
+        </div>
+        <div class="lease-arrow"><span>leases 768 tokens</span><i aria-hidden="true">↓</i></div>
+        <div class="module-row memory">
+          <div><b>memory</b><span>elastic · borrower</span></div>
+          <strong id="memory-value">2,816</strong>
+          <div class="micro-bar"><i id="memory-bar" style="--width:74%"></i></div>
+        </div>
+        <div class="module-row history">
+          <div><b>history</b><span>elastic · donor</span></div>
+          <strong id="history-value">2,304</strong>
+          <div class="micro-bar"><i id="history-bar" style="--width:58%"></i></div>
+        </div>
+        <label class="pressure-control" for="pressure">
+          <span>Grow history demand</span>
+          <input id="pressure" type="range" min="0" max="100" value="30">
+        </label>
+        <p class="demo-event" id="demo-event"><time>now</time> lease.granted <b>memory +768</b></p>
+      </div>
+    </section>
+
+    <section class="problem-band" aria-label="Problem statement">
+      <div class="shell problem-grid">
+        <p>Prompt builders usually discover context pressure at the last possible moment.</p>
+        <p>ContextLease makes it a controlled lifecycle:</p>
+        <div class="lifecycle" aria-label="Budget lifecycle">
+          <span>Budget</span><i>→</i><span>Borrow</span><i>→</i><span>Reclaim</span><i>→</i><span>Observe</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section shell" id="how">
+      <div class="section-heading">
+        <p class="eyebrow">MEMORY-MANAGEMENT IDEAS, APPLIED TO PROMPTS</p>
+        <h2>A hard context limit.<br>A predictable control loop.</h2>
+      </div>
+      <div class="steps">
+        <article><span>01</span><h3>Declare</h3><p>The host defines each module's floor, target, maximum, weight, lifecycle, protection, and whether it may lend or borrow.</p></article>
+        <article><span>02</span><h3>Allocate</h3><p>Demand is satisfied through protected floors, local targets, and donor-attributed expansion leases.</p></article>
+        <article><span>03</span><h3>Reclaim</h3><p>If donors grow, borrowers run the release pipelines they registered before receiving extra capacity.</p></article>
+        <article><span>04</span><h3>Verify</h3><p>Required terms, monotonic size, final bounds, and privacy-safe trace events are checked every time.</p></article>
+      </div>
+    </section>
+
+    <section class="section dark-section" id="providers">
+      <div class="shell provider-grid">
+        <div>
+          <p class="eyebrow">SEMANTIC COMPRESSION, WITHOUT LOCK-IN</p>
+          <h2>Bring the model provider you already use.</h2>
+          <p>Start with deterministic reducers. Add LLM summaries only where semantics matter. Provider IDs live in configuration and credentials stay in environment variables.</p>
+          <ul class="check-list">
+            <li>Built-in OpenAI-compatible HTTP adapter</li>
+            <li>Optional, lazy LiteLLM adapter</li>
+            <li>Custom provider protocol and test callable</li>
+            <li>Single-provider or multi-provider portfolio summaries</li>
+          </ul>
+        </div>
+        <pre class="code-panel" aria-label="Provider configuration example"><code><span>"providers"</span>: {
+  <em>"summary-fast"</em>: {
+    "type": <b>"openai-compatible"</b>,
+    "base_url": <b>"https://…/v1"</b>,
+    "model": <b>"summary-model"</b>,
+    "api_key_env": <b>"MODEL_API_KEY"</b>
+  }
+}
+
+<span>"reclaim_pipeline"</span>: [{
+  "algorithm_id":
+    <b>"builtin.semantic.summary.v1"</b>,
+  "options": {"provider": <em>"summary-fast"</em>}
+}]</code></pre>
+      </div>
+    </section>
+
+    <section class="section shell observability" id="observability">
+      <div class="section-heading narrow">
+        <p class="eyebrow">OBSERVABILITY IS PART OF THE ALLOCATOR</p>
+        <h2>See where the context went.</h2>
+        <p>The bundled read-only Debug Web streams utilization, module pressure, compression, and donor-to-borrower leases. Prompt bodies stay out of telemetry.</p>
+      </div>
+      <figure class="screenshot-frame">
+        <div class="browser-bar"><i></i><i></i><i></i><span>127.0.0.1 · ContextLease Debug Web</span></div>
+        <img src="assets/debug-web.svg" alt="ContextLease Debug Web dashboard with token allocation and lease telemetry">
+      </figure>
+    </section>
+
+    <section class="section shell use-cases">
+      <p class="eyebrow">BUILT FOR CONTEXT THAT CHANGES</p>
+      <div class="use-grid">
+        <h2>Agent runtimes.<br>RAG pipelines.<br>Long conversations.<br>Tool-heavy workflows.</h2>
+        <p>The core has no opinion about your modules. System contracts, tools, memory, retrieval, examples, and history are external choices—ContextLease gives them a shared, enforceable budget.</p>
+      </div>
+    </section>
+
+    <section class="cta shell">
+      <p class="eyebrow">START WITH A REAL, RUNNABLE DEMO</p>
+      <h2>Stop truncating blindly.</h2>
+      <p>Make prompt pressure visible, reclaimable, and testable.</p>
+      <div class="actions centered">
+        <a class="button primary" href="https://github.com/yuexiong/contextlease">Explore ContextLease <span aria-hidden="true">→</span></a>
+        <a class="button secondary" href="architecture.md">Read the architecture</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-grid">
+      <span>ContextLease · Apache-2.0</span>
+      <span>Dynamic LLM context budgeting & prompt compression</span>
+    </div>
+  </footer>
+  <div class="toast" id="toast" role="status" aria-live="polite">Copied to clipboard</div>
+</body>
+</html>

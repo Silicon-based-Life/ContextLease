@@ -1,0 +1,81 @@
+{
+  "arena": {
+    "arena_id": "agent-demo",
+    "policy_version": "demo-1",
+    "framework_reserve_tokens": 8,
+    "modules": [
+      {
+        "module_id": "system_contract",
+        "floor_tokens": 20,
+        "target_tokens": 35,
+        "max_tokens": 35,
+        "order": 0,
+        "can_borrow": false,
+        "can_lend": false,
+        "protection": "pinned",
+        "reclaim": "none"
+      },
+      {
+        "module_id": "memory",
+        "floor_tokens": 10,
+        "target_tokens": 28,
+        "max_tokens": 65,
+        "order": 1,
+        "weight": 1.2,
+        "protection": "mixed",
+        "reclaim_pipeline": [
+          {"algorithm_id": "builtin.text.deduplicate_blocks.v1"},
+          {"algorithm_id": "builtin.text.extractive_sentence_rank.v1"},
+          {"algorithm_id": "builtin.text.boundary_truncate.v1"}
+        ]
+      },
+      {
+        "module_id": "history",
+        "floor_tokens": 8,
+        "target_tokens": 30,
+        "max_tokens": 75,
+        "order": 2,
+        "weight": 1.0,
+        "protection": "elastic",
+        "reclaim_pipeline": [
+          {"algorithm_id": "builtin.text.normalize_whitespace.v1"},
+          {"algorithm_id": "builtin.text.boundary_truncate.v1", "options": {"keep": "tail"}}
+        ]
+      }
+    ]
+  },
+  "model": {
+    "model_profile_id": "demo-160",
+    "context_limit_tokens": 180,
+    "reserved_output_tokens": 20,
+    "tokenizer_id": "regex-estimator-v1",
+    "count_mode": "estimated"
+  },
+  "providers": {},
+  "contributions": [
+    {
+      "module_id": "system_contract",
+      "chunks": [{
+        "chunk_id": "system",
+        "fixed": true,
+        "protection": "pinned",
+        "content": "You are a reliable agent. Preserve safety rules and never invent tool results."
+      }]
+    },
+    {
+      "module_id": "memory",
+      "chunks": [{
+        "chunk_id": "memory-1",
+        "required_terms": ["blue lighthouse"],
+        "content": "The user prefers concise answers. The unresolved landmark is the blue lighthouse. The user prefers concise answers. Older optional detail: a long weather discussion was recorded yesterday and is now low priority."
+      }]
+    },
+    {
+      "module_id": "history",
+      "chunks": [{
+        "chunk_id": "history-1",
+        "content": "User asked about a route. Assistant checked three alternatives. Tool result one was superseded. Tool result two was superseded. The latest verified route reaches the harbor through the north gate."
+      }]
+    }
+  ]
+}

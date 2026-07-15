@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextlease"
+version = "0.1.0"
+description = "Dynamic LLM context budgeting, revocable token leases, prompt compression, pluggable summarizers, and real-time observability."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "ContextLease contributors" }]
+keywords = [
+  "llm", "prompt-engineering", "prompt-management", "prompt-compression",
+  "context-window", "context-management", "token-budget", "ai-agents",
+  "litellm", "openai-compatible", "observability", "summarization"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/yuexiong/contextlease"
+Documentation = "https://yuexiong.github.io/contextlease/"
+Repository = "https://github.com/yuexiong/contextlease"
+Issues = "https://github.com/yuexiong/contextlease/issues"
+
+[project.scripts]
+contextlease = "contextlease.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"contextlease.debug" = ["static/*.html", "static/*.css", "static/*.js"]
+"contextlease.schema" = ["*.json"]
+"contextlease.examples" = ["*.json"]
