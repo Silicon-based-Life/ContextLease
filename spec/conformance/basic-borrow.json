@@ -1,0 +1,18 @@
+{
+  "definition": {
+    "arena_id": "conformance-basic",
+    "modules": [
+      {"module_id":"system","floor_tokens":1,"target_tokens":4,"max_tokens":4,"order":0,"protection":"pinned","can_borrow":false},
+      {"module_id":"memory","floor_tokens":1,"target_tokens":2,"max_tokens":8,"order":1,"reclaim_pipeline":[{"algorithm_id":"builtin.text.boundary_truncate.v1"}]}
+    ]
+  },
+  "request": {
+    "request_id":"fixture-basic",
+    "model":{"model_profile_id":"tiny","context_limit_tokens":12,"reserved_output_tokens":2},
+    "contributions":[
+      {"module_id":"system","chunks":[{"chunk_id":"rules","content":"never invent","fixed":true,"protection":"pinned"}]},
+      {"module_id":"memory","chunks":[{"chunk_id":"facts","content":"one two three four five six"}]}
+    ]
+  },
+  "assert":{"max_prompt_tokens":10,"must_contain":["never invent"],"lease_borrower":"memory"}
+}

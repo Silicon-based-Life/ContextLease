@@ -9,6 +9,10 @@ htmlcov/
 venv/
 dist/
 build/
+target/
+**/bin/
+**/obj/
+bindings/go/native/
 .env
 .DS_Store
 .idea/
