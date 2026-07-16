@@ -5,7 +5,7 @@ Thanks for helping improve ContextLease.
 ## Development setup
 
 ```bash
-git clone https://github.com/yuexiong/contextlease.git
+git clone https://github.com/Silicon-based-Life/ContextLease.git
 cd contextlease
 python -m venv .venv
 .venv/Scripts/activate

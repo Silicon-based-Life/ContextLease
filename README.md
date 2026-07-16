@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yuexiong/contextlease/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yuexiong/contextlease/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-5de4c7">
   <a href="https://www.python.org/"><img alt="Python 3.11–3.14" src="https://img.shields.io/badge/python-3.11%E2%80%933.14-82aaff"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-d7a8ff"></a>
@@ -33,7 +33,7 @@ Most prompt builders concatenate content and truncate at the end. That makes con
 ContextLease has no required runtime dependencies.
 
 ```bash
-pip install git+https://github.com/yuexiong/contextlease.git
+pip install git+https://github.com/Silicon-based-Life/ContextLease.git
 contextlease demo --open
 ```
 

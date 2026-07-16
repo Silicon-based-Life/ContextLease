@@ -29,10 +29,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/yuexiong/contextlease"
-Documentation = "https://yuexiong.github.io/contextlease/"
-Repository = "https://github.com/yuexiong/contextlease"
-Issues = "https://github.com/yuexiong/contextlease/issues"
+Homepage = "https://github.com/Silicon-based-Life/ContextLease"
+Documentation = "https://silicon-based-life.github.io/ContextLease/"
+Repository = "https://github.com/Silicon-based-Life/ContextLease"
+Issues = "https://github.com/Silicon-based-Life/ContextLease/issues"
 
 [project.scripts]
 contextlease = "contextlease.cli:main"
