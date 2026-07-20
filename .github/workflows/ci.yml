@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "agent/**"]
   pull_request:
 
 permissions:
@@ -145,3 +145,13 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/bindings/go/native/linux-x86_64
         run: go test ./...
+
+  release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/verify_release_versions.py
+      - run: python -m unittest tests.test_release_metadata -v

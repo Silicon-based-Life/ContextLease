@@ -271,7 +271,16 @@ dotnet build bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.cspro
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [architecture](docs/architecture.md),
-[native bindings](docs/native-bindings.md), and [provider guide](docs/providers.md).
+[native bindings](docs/native-bindings.md), [provider guide](docs/providers.md), and
+[release guide](docs/releasing.md).
+
+## Release artifacts
+
+Tagged releases produce Python wheel/source packages, `ContextLease.Managed` NuGet
+packages, and native SDK ZIPs for Windows x86-64, Linux x86-64, and macOS arm64.
+Every native archive contains the C/C++ headers, the ABI- and release-qualified shared
+library, license files, and integration documentation. GitHub releases include
+`SHA256SUMS.txt`; registry publication remains an explicit reviewed step.
 
 ## Search keywords
 

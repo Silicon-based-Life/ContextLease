@@ -8,8 +8,7 @@ version = "0.2.0"
 description = "Dynamic LLM context budgeting, revocable token leases, prompt compression, pluggable summarizers, and real-time observability."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license = { text = "Apache-2.0" }
 authors = [{ name = "ContextLease contributors" }]
 keywords = [
   "llm", "prompt-engineering", "prompt-management", "prompt-compression",
