@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "agent/**"]
   pull_request:
 
 permissions:
@@ -51,3 +51,107 @@ jobs:
         with:
           name: contextlease-wheel
           path: dist/*.whl
+
+  rust-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install . --no-build-isolation
+      - name: Python to Rust ABI conformance
+        env:
+          CONTEXTLEASE_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libcontextlease_native.so
+        run: python -m unittest discover -s tests -p "test_native_binding.py" -v
+
+  native-artifacts:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: contextlease-native-linux-x86_64
+            path: target/release/libcontextlease_native.so
+          - os: windows-latest
+            artifact: contextlease-native-windows-x86_64
+            path: target/release/contextlease_native.dll
+          - os: macos-latest
+            artifact: contextlease-native-macos-arm64
+            path: target/release/libcontextlease_native.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p contextlease-ffi --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+
+  c-cpp-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p contextlease-ffi --release
+      - name: Compile C binding smoke
+        run: cc bindings/c/tests/smoke.c -Ibindings/c/include -Ltarget/release -lcontextlease_native -o target/contextlease-c-smoke
+      - name: Run C binding smoke
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+        run: target/contextlease-c-smoke
+      - name: Compile C++ binding smoke
+        run: c++ bindings/cpp/tests/smoke.cpp -std=c++17 -Ibindings/c/include -Ibindings/cpp/include -Ltarget/release -lcontextlease_native -o target/contextlease-cpp-smoke
+      - name: Run C++ binding smoke
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+        run: target/contextlease-cpp-smoke
+
+  dotnet-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: cargo build -p contextlease-ffi --release
+      - run: cp target/release/libcontextlease_native.so target/release/libcontextlease_native_abi1_v0_2_0.so
+      - run: dotnet build bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.csproj -c Release
+      - name: .NET to Rust ABI smoke
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+        run: dotnet run --project bindings/dotnet/tests/ContextLease.Managed.Smoke/ContextLease.Managed.Smoke.csproj -c Release -- spec/conformance/basic-borrow.json
+
+  go-binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - run: cargo build -p contextlease-ffi --release
+      - run: mkdir -p bindings/go/native/linux-x86_64
+      - run: cp target/release/libcontextlease_native.so bindings/go/native/linux-x86_64/
+      - name: Compile Go binding
+        working-directory: bindings/go
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/bindings/go/native/linux-x86_64
+        run: go test ./...
+
+  release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/verify_release_versions.py
+      - run: python -m unittest tests.test_release_metadata -v

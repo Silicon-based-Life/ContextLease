@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.20)
+project(contextlease_native_consumers LANGUAGES C CXX)
+
+set(CONTEXTLEASE_NATIVE_LIBRARY "" CACHE FILEPATH "Path to the built ContextLease native library")
+if(NOT CONTEXTLEASE_NATIVE_LIBRARY)
+  message(FATAL_ERROR "Set CONTEXTLEASE_NATIVE_LIBRARY to contextlease_native shared library")
+endif()
+
+add_library(contextlease_native SHARED IMPORTED GLOBAL)
+set_target_properties(contextlease_native PROPERTIES IMPORTED_LOCATION "${CONTEXTLEASE_NATIVE_LIBRARY}")
+if(WIN32)
+  set(CONTEXTLEASE_NATIVE_IMPLIB "" CACHE FILEPATH "Path to contextlease_native import library")
+  if(CONTEXTLEASE_NATIVE_IMPLIB)
+    set_target_properties(contextlease_native PROPERTIES IMPORTED_IMPLIB "${CONTEXTLEASE_NATIVE_IMPLIB}")
+  endif()
+endif()
+target_include_directories(contextlease_native INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/include")
+
+add_executable(contextlease_c_smoke bindings/c/tests/smoke.c)
+target_link_libraries(contextlease_c_smoke PRIVATE contextlease_native)
+
+add_executable(contextlease_cpp_smoke bindings/cpp/tests/smoke.cpp)
+target_compile_features(contextlease_cpp_smoke PRIVATE cxx_std_17)
+target_include_directories(contextlease_cpp_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/bindings/cpp/include")
+target_link_libraries(contextlease_cpp_smoke PRIVATE contextlease_native)
