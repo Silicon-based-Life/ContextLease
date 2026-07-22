@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ContextLease — Dynamic LLM Context Budgeting & Prompt Compression</title>
-  <meta name="description" content="Open-source Python framework for LLM context management, prompt compression, revocable token leases, LiteLLM and OpenAI-compatible summaries, and real-time observability.">
+  <meta name="description" content="Open-source cross-language LLM context management framework with a canonical Rust kernel, revocable token leases, prompt compression, exact tokenizers, and native observability.">
   <meta name="keywords" content="LLM context management,prompt compression,token budgeting,AI agents,context window,prompt management,LiteLLM,LLM observability">
   <meta name="theme-color" content="#07111f">
   <meta property="og:title" content="ContextLease — Give every prompt token a job">
-  <meta property="og:description" content="Budget, borrow, reclaim, compress, and observe LLM context with a provider-neutral Python framework.">
+  <meta property="og:description" content="Budget, borrow, reclaim, compress, and observe LLM context through one provider-neutral Rust kernel.">
   <meta property="og:type" content="website">
   <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="site.css">
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"ContextLease","description":"Dynamic LLM context budgeting, prompt compression, and observability","programmingLanguage":"Python","license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/Silicon-based-Life/ContextLease","keywords":"LLM context management, prompt compression, token budgeting, AI agents"}
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"ContextLease","description":"Dynamic LLM context budgeting, prompt compression, and native observability","programmingLanguage":["Rust","Python","C","C++","Go","C#"],"license":"https://www.apache.org/licenses/LICENSE-2.0","codeRepository":"https://github.com/Silicon-based-Life/ContextLease","keywords":"LLM context management, prompt compression, token budgeting, AI agents"}
   </script>
   <script src="site.js" defer></script>
 </head>
@@ -37,7 +37,7 @@
   <main id="main">
     <section class="hero shell" id="top">
       <div class="hero-copy">
-        <p class="eyebrow">OPEN-SOURCE · PROVIDER-NEUTRAL · DEPENDENCY-FREE CORE</p>
+        <p class="eyebrow">OPEN-SOURCE · PROVIDER-NEUTRAL · CANONICAL RUST KERNEL</p>
         <h1>Give every prompt token <span>a job.</span></h1>
         <p class="lede">ContextLease manages an agent's context window like a resource allocator: protect critical modules, lend idle capacity, reclaim it safely, and compress only through registered release plans.</p>
         <div class="actions">
@@ -45,9 +45,9 @@
           <button class="button secondary copy-command" type="button" data-command="pip install git+https://github.com/Silicon-based-Life/ContextLease.git"><code>pip install from GitHub</code><span class="copy-label">Copy</span></button>
         </div>
         <ul class="proof" aria-label="Project guarantees">
-          <li><strong>14</strong> compression algorithms</li>
-          <li><strong>0</strong> required dependencies</li>
-          <li><strong>REST + SSE</strong> live telemetry</li>
+          <li><strong>1</strong> behavioral kernel</li>
+          <li><strong>7</strong> language targets</li>
+          <li><strong>ABI v2</strong> native telemetry</li>
         </ul>
       </div>
       <div class="allocator-demo" aria-label="Interactive token allocation example">

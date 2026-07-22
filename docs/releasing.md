@@ -8,8 +8,9 @@ and `CITATION.cff`.
 2. Run `python scripts/verify_release_versions.py --tag vX.Y.Z`.
 3. Run the full CI matrix on a pull request.
 4. Create and push the signed or annotated `vX.Y.Z` tag.
-5. The Release workflow builds Python packages, the NuGet package, and native SDK
-   ZIPs for Windows x86-64, Linux x86-64, and macOS arm64. It then creates a
+5. The Release workflow builds the Python sdist plus Rust-bundled platform wheels,
+   the NuGet package, and native SDK ZIPs for Windows x86-64, Linux x86-64, and
+   macOS arm64. It then creates a
    GitHub release with SHA-256 checksums.
 
 Registry publication is intentionally separate from GitHub release creation.

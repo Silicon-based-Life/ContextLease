@@ -9,5 +9,6 @@ int main() {
         R"({"request_id":"cpp-smoke-r1","model":{"model_profile_id":"tiny","context_limit_tokens":8,"reserved_output_tokens":0},"contributions":[{"module_id":"system","chunks":[{"chunk_id":"contract","content":"keep contract","fixed":true}]}]})";
     contextlease::arena arena(definition);
     const std::string prepared = arena.prepare(request);
-    return prepared.find("keep contract") == std::string::npos ? 1 : 0;
+    if (prepared.find("keep contract") == std::string::npos) return 1;
+    return arena.events().find("request.prepared") == std::string::npos ? 2 : 0;
 }

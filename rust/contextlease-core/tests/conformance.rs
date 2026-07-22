@@ -66,6 +66,7 @@ fn shared_contract_fields_are_preserved() {
     let prepared = ContextLeaseArena::new(fixture.arena)
         .unwrap()
         .prepare(PrepareRequest {
+            schema_version: "1.0".into(),
             model: fixture.model,
             contributions: fixture.contributions,
             request_id: Some("contract-rust".into()),

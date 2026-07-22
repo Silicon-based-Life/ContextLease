@@ -13,7 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class ReleaseMetadataTests(unittest.TestCase):
     def test_versions_are_consistent(self) -> None:
         completed = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/verify_release_versions.py"), "--tag", "v0.2.0"],
+            [sys.executable, str(ROOT / "scripts/verify_release_versions.py"), "--tag", "v0.3.0"],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -41,7 +41,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 cwd=ROOT,
                 check=True,
             )
-            archive = output / "contextlease-native-windows-x86_64-v0.2.0.zip"
+            archive = output / "contextlease-native-windows-x86_64-v0.3.0.zip"
             self.assertTrue(archive.is_file())
             self.assertGreater(archive.stat().st_size, 0)
 

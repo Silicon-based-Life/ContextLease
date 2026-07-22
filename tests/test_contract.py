@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
 
 from contextlease.config import (
@@ -20,16 +21,32 @@ from contextlease.enums import (
     RenderTarget,
 )
 from contextlease.errors import ConfigurationError
+from contextlease.models import ContextPlan, PreparedContextPlan
 
 
 ROOT = Path(__file__).parents[1]
 SCHEMA = json.loads(
     (ROOT / "src" / "contextlease" / "schema" / "contextlease.schema.json").read_text(encoding="utf-8")
 )
+RUNTIME_SCHEMA = json.loads(
+    (ROOT / "src" / "contextlease" / "schema" / "contextlease.runtime.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
 FIXTURE = ROOT / "spec" / "conformance" / "contract-fields.json"
 
 
 class ContractTests(unittest.TestCase):
+    def test_prepared_python_dto_matches_runtime_schema(self) -> None:
+        self.assertEqual(
+            {field.name for field in fields(PreparedContextPlan)},
+            set(RUNTIME_SCHEMA["$defs"]["prepared_context_plan"]["properties"]),
+        )
+        self.assertEqual(
+            {field.name for field in fields(ContextPlan)},
+            set(RUNTIME_SCHEMA["$defs"]["context_plan"]["properties"]),
+        )
+
     def test_schema_enums_match_python_contract(self) -> None:
         definitions = SCHEMA["$defs"]
         pairs = (

@@ -110,6 +110,14 @@ class ModuleContribution:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextPlan:
+    model: ModelProfile
+    contributions: tuple[ModuleContribution, ...]
+    request_id: str | None = None
+    schema_version: str = "1.0"
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledLayout:
     definition: ArenaDefinition
     layout_hash: str
@@ -187,6 +195,43 @@ class ModuleUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class UsageCalibration:
+    model_profile_id: str
+    tokenizer_id: str
+    tokenizer_version: str
+    sample_count: int
+    ewma_ratio: float
+    safety_multiplier: float
+    last_estimated_tokens: int
+    last_actual_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedChunk:
+    chunk_id: str
+    kind: str
+    content: Any
+    fixed: bool
+    protection: ProtectionPolicy
+    priority: float
+    required_terms: tuple[str, ...]
+    dependency_group: str | None
+    metadata: Mapping[str, Any]
+    token_count: int
+    compressed: bool
+    source_chunk_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedModulePlan:
+    module_id: str
+    render_target: RenderTarget
+    allocation: ModuleAllocation
+    usage: ModuleUsage
+    chunks: tuple[PreparedChunk, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ArenaSnapshot:
     schema_version: str
     arena_id: str
@@ -196,6 +241,7 @@ class ArenaSnapshot:
     request_id: str | None
     model_profile_id: str
     tokenizer_id: str
+    tokenizer_version: str
     token_count_mode: CountMode
     layout_hash: str
     policy_version: str
@@ -209,6 +255,7 @@ class ArenaSnapshot:
     pressure: Pressure
     modules: tuple[ModuleUsage, ...]
     leases: tuple[Lease, ...]
+    calibration: UsageCalibration | None = None
     health: Mapping[str, Any] = field(default_factory=dict)
 
     def public_dict(self) -> dict[str, Any]:
@@ -216,17 +263,56 @@ class ArenaSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedContext:
+class PreparedContextPlan:
+    schema_version: str
+    core_version: str
     arena_id: str
     instance_id: str
     request_id: str
     layout_hash: str
     policy_version: str
+    model_profile_id: str
+    tokenizer_id: str
+    tokenizer_version: str
+    token_count_mode: CountMode
+    context_limit_tokens: int
+    reserved_output_tokens: int
+    framework_reserve_tokens: int
     rendered: str
     prompt_tokens: int
     input_budget_tokens: int
+    slack_tokens: int
+    pressure: Pressure
     allocations: tuple[ModuleAllocation, ...]
     leases: tuple[Lease, ...]
-    module_contents: Mapping[str, tuple[PromptChunk, ...]]
+    modules: tuple[ModuleUsage, ...]
+    module_plans: tuple[PreparedModulePlan, ...]
     trace_events: tuple[TraceEvent, ...]
     snapshot: ArenaSnapshot
+    calibration: UsageCalibration | None = None
+
+    @property
+    def module_contents(self) -> Mapping[str, tuple[PromptChunk, ...]]:
+        """Compatibility view derived from the canonical structured plan."""
+        return {
+            module.module_id: tuple(
+                PromptChunk(
+                    chunk_id=chunk.chunk_id,
+                    content=chunk.content,
+                    kind=chunk.kind,
+                    fixed=chunk.fixed,
+                    protection=chunk.protection,
+                    priority=chunk.priority,
+                    required_terms=chunk.required_terms,
+                    dependency_group=chunk.dependency_group,
+                    metadata=chunk.metadata,
+                )
+                for chunk in module.chunks
+            )
+            for module in self.module_plans
+        }
+
+
+# Source-compatible name retained while the public contract moves to the
+# explicit PreparedContextPlan terminology.
+PreparedContext = PreparedContextPlan

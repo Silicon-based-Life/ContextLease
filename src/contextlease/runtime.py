@@ -2,16 +2,12 @@ from __future__ import annotations
 
 import json
 import threading
-import uuid
-from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Iterable, Mapping
 
-from .allocation import allocate_budget
-from .compression import CompressionPipeline, CompressionRequest, CompressionRegistry, create_builtin_registry
-from .enums import EventPriority, LeaseState, Pressure, ProtectionPolicy
-from .errors import AdmissionError, ConfigurationError
-from .layout import compile_layout, validate_model_budget
+from .enums import CountMode, EventPriority, LeaseState, Pressure, ProtectionPolicy, RenderTarget
+from .errors import AdmissionError, ConfigurationError, LayoutValidationError
+from .layout import compile_layout
 from .models import (
     ArenaDefinition,
     ArenaSnapshot,
@@ -20,220 +16,119 @@ from .models import (
     ModuleAllocation,
     ModuleContribution,
     ModuleUsage,
-    PreparedContext,
+    PreparedChunk,
+    PreparedContextPlan,
+    PreparedModulePlan,
     PromptChunk,
     TraceEvent,
+    UsageCalibration,
+    to_public_dict,
 )
+from .native import NativeArena, NativeContextLeaseError
 from .observation import ObservationStore
-from .providers import SummaryProviderRegistry
-from .tokenization import RegexTokenCounter, TokenCounter
+from .providers import SummaryProviderRegistry, SummaryRequest
+from .tokenization import TokenCounter
 
 
-def _pressure(used: int, capacity: int) -> Pressure:
-    if capacity <= 0:
-        return Pressure.OVERFLOW if used else Pressure.NORMAL
-    ratio = used / capacity
-    if ratio > 1:
-        return Pressure.OVERFLOW
-    if ratio >= 0.95:
-        return Pressure.CRITICAL
-    if ratio >= 0.8:
-        return Pressure.ELEVATED
-    return Pressure.NORMAL
+def _datetime(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(UTC)
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(UTC)
 
 
-def _render_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    return json.dumps(content, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+def _allocation(value: Mapping[str, Any]) -> ModuleAllocation:
+    return ModuleAllocation(**{key: int(item) if key != "module_id" else str(item) for key, item in value.items()})
+
+
+def _lease(value: Mapping[str, Any]) -> Lease:
+    return Lease(
+        lease_id=str(value["lease_id"]),
+        donor_module_id=str(value["donor_module_id"]),
+        borrower_module_id=str(value["borrower_module_id"]),
+        granted_tokens=int(value["granted_tokens"]),
+        currently_used_tokens=int(value["currently_used_tokens"]),
+        reclaimable_tokens=int(value["reclaimable_tokens"]),
+        release_pipeline=tuple(map(str, value.get("release_pipeline", ()))),
+        state=LeaseState(value.get("state", "active")),
+        reclaim_reason=value.get("reclaim_reason"),
+    )
+
+
+def _usage(value: Mapping[str, Any]) -> ModuleUsage:
+    return ModuleUsage(
+        module_id=str(value["module_id"]),
+        floor_tokens=int(value["floor_tokens"]),
+        target_tokens=int(value["target_tokens"]),
+        max_tokens=int(value["max_tokens"]),
+        allocated_tokens=int(value["allocated_tokens"]),
+        demanded_tokens=int(value["demanded_tokens"]),
+        used_tokens=int(value["used_tokens"]),
+        fixed_tokens=int(value["fixed_tokens"]),
+        variable_tokens=int(value["variable_tokens"]),
+        pinned_tokens=int(value["pinned_tokens"]),
+        elastic_tokens=int(value["elastic_tokens"]),
+        reclaimable_tokens=int(value["reclaimable_tokens"]),
+        minimum_retained_tokens=int(value["minimum_retained_tokens"]),
+        local_capacity_tokens=int(value["local_capacity_tokens"]),
+        borrowed_capacity_tokens=int(value["borrowed_capacity_tokens"]),
+        lent_capacity_tokens=int(value["lent_capacity_tokens"]),
+        compressed_from_tokens=int(value["compressed_from_tokens"]),
+        compressed_to_tokens=int(value["compressed_to_tokens"]),
+        compression_ratio=float(value["compression_ratio"]),
+        change_rate=float(value["change_rate"]),
+        pressure=Pressure(value["pressure"]),
+        last_updated_at=_datetime(value.get("last_updated_at")),
+    )
+
+
+def _calibration(value: Mapping[str, Any] | None) -> UsageCalibration | None:
+    if not value:
+        return None
+    return UsageCalibration(
+        model_profile_id=str(value["model_profile_id"]),
+        tokenizer_id=str(value["tokenizer_id"]),
+        tokenizer_version=str(value["tokenizer_version"]),
+        sample_count=int(value["sample_count"]),
+        ewma_ratio=float(value["ewma_ratio"]),
+        safety_multiplier=float(value["safety_multiplier"]),
+        last_estimated_tokens=int(value["last_estimated_tokens"]),
+        last_actual_tokens=int(value["last_actual_tokens"]),
+    )
 
 
 class ContextLeaseArena:
+    """Pythonic facade over the canonical Rust allocation/reclaim kernel."""
+
     def __init__(
         self,
         definition: ArenaDefinition,
         *,
         token_counter: TokenCounter | None = None,
-        compression_registry: CompressionRegistry | None = None,
+        compression_registry: Any | None = None,
         summary_providers: SummaryProviderRegistry | None = None,
         observations: ObservationStore | None = None,
         instance_id: str | None = None,
+        native_library_path: str | None = None,
     ) -> None:
+        if compression_registry is not None:
+            raise ConfigurationError(
+                "Python compression registries are not execution cores; register a Rust algorithm or use a semantic provider"
+            )
         self.layout = compile_layout(definition)
-        self.token_counter = token_counter or RegexTokenCounter()
-        self.compression_registry = compression_registry or create_builtin_registry()
-        self.compression_pipeline = CompressionPipeline(self.compression_registry)
         self.summary_providers = summary_providers or SummaryProviderRegistry()
         self.observations = observations or ObservationStore()
-        self.instance_id = instance_id or uuid.uuid4().hex
-        self._event_seq = 0
-        self._snapshot_seq = 0
-        self._active_leases: dict[str, Lease] = {}
-        self._previous_usage: dict[str, int] = {}
+        self._instance_id_override = instance_id
         self._prepare_lock = threading.RLock()
+        self._native = NativeArena(to_public_dict(definition), library_path=native_library_path)
+        if token_counter is not None:
+            self._native.set_token_counter(token_counter)
 
-    def _event(
-        self,
-        event_type: str,
-        request_id: str | None,
-        payload: Mapping[str, Any],
-        priority: EventPriority = EventPriority.STATE,
-    ) -> TraceEvent:
-        self._event_seq += 1
-        return TraceEvent(
-            event_id=f"{self.instance_id}:{self._event_seq}",
-            seq=self._event_seq,
-            occurred_at=datetime.now(UTC),
-            arena_id=self.layout.definition.arena_id,
-            instance_id=self.instance_id,
-            request_id=request_id,
-            event_type=event_type,
-            schema_version="1.0",
-            layout_hash=self.layout.layout_hash,
-            policy_version=self.layout.definition.policy_version,
-            payload=payload,
-            priority=priority,
-        )
-
-    def _validate_contributions(
-        self, contributions: Iterable[ModuleContribution]
-    ) -> dict[str, ModuleContribution]:
-        result: dict[str, ModuleContribution] = {}
-        for contribution in contributions:
-            if contribution.module_id not in self.layout.module_by_id:
-                raise ConfigurationError(f"unknown contribution module: {contribution.module_id}")
-            if contribution.module_id in result:
-                raise ConfigurationError(f"duplicate contribution module: {contribution.module_id}")
-            chunk_ids: set[str] = set()
-            for chunk in contribution.chunks:
-                if chunk.chunk_id in chunk_ids:
-                    raise ConfigurationError(
-                        f"module {contribution.module_id} contains duplicate chunk_id {chunk.chunk_id}"
-                    )
-                chunk_ids.add(chunk.chunk_id)
-            result[contribution.module_id] = contribution
-        return result
-
-    def _compress_module(
-        self,
-        module_id: str,
-        chunks: tuple[PromptChunk, ...],
-        allocation: ModuleAllocation,
-    ) -> tuple[tuple[PromptChunk, ...], int, int, Mapping[str, Any]]:
-        module = self.layout.module_by_id[module_id]
-        pinned = tuple(
-            chunk
-            for chunk in chunks
-            if module.protection == ProtectionPolicy.PINNED
-            or chunk.protection == ProtectionPolicy.PINNED
-        )
-        elastic = tuple(chunk for chunk in chunks if chunk not in pinned)
-        pinned_tokens = sum(self.token_counter.count_content(chunk.content) for chunk in pinned)
-        before_tokens = sum(self.token_counter.count_content(chunk.content) for chunk in chunks)
-        if pinned_tokens > allocation.allocated_tokens:
-            raise AdmissionError(
-                f"module {module_id}: pinned content needs {pinned_tokens} tokens, allocation is {allocation.allocated_tokens}"
-            )
-        elastic_target = allocation.allocated_tokens - pinned_tokens
-        elastic_before = sum(self.token_counter.count_content(chunk.content) for chunk in elastic)
-        if elastic_before <= elastic_target:
-            return chunks, before_tokens, before_tokens, {"status": "not_needed"}
-        if not module.reclaim_pipeline:
-            raise AdmissionError(
-                f"module {module_id}: over allocation and no reclaim pipeline is registered"
-            )
-        if not elastic:
-            raise AdmissionError(f"module {module_id}: no elastic content is available for reclaim")
-
-        if len(elastic) == 1:
-            combined = elastic[0].content
-            kind = elastic[0].kind
-        elif all(isinstance(chunk.content, str) for chunk in elastic):
-            combined = "\n\n".join(str(chunk.content) for chunk in elastic)
-            kind = "text"
-        else:
-            combined = [
-                {
-                    "content": chunk.content,
-                    "priority": chunk.priority,
-                    "created_at": chunk.created_at.isoformat(),
-                    "dependency_group": chunk.dependency_group,
-                }
-                for chunk in elastic
-            ]
-            kind = "collection"
-        required_terms = tuple(dict.fromkeys(term for chunk in elastic for term in chunk.required_terms))
-        result = self.compression_pipeline.execute(
-            CompressionRequest(
-                content=combined,
-                target_tokens=elastic_target,
-                counter=self.token_counter,
-                required_terms=required_terms,
-                services={"summary_providers": self.summary_providers},
-                metadata={"arena_id": self.layout.definition.arena_id, "module_id": module_id},
-            ),
-            module.reclaim_pipeline,
-            fail_open=True,
-        )
-        if result.after_tokens > elastic_target:
-            raise AdmissionError(
-                f"module {module_id}: reclaim pipeline left {result.after_tokens} elastic tokens, target is {elastic_target}"
-            )
-        compressed = PromptChunk(
-            chunk_id=f"{module_id}:compressed",
-            content=result.content,
-            kind=kind,
-            fixed=False,
-            protection=ProtectionPolicy.ELASTIC,
-            priority=max((chunk.priority for chunk in elastic), default=1.0),
-            required_terms=required_terms,
-            metadata={"compression_trace": result.trace, "source_chunks": len(elastic)},
-        )
-        final_chunks = pinned + (compressed,)
-        after_tokens = sum(self.token_counter.count_content(chunk.content) for chunk in final_chunks)
-        return final_chunks, before_tokens, after_tokens, result.trace
-
-    def _lease_events(
-        self, leases: tuple[Lease, ...], request_id: str
-    ) -> list[TraceEvent]:
-        events: list[TraceEvent] = []
-        next_by_id = {lease.lease_id: lease for lease in leases}
-        for lease_id, previous in self._active_leases.items():
-            current = next_by_id.get(lease_id)
-            reclaimed = previous.granted_tokens - (current.granted_tokens if current else 0)
-            if reclaimed > 0:
-                events.append(
-                    self._event(
-                        "lease.reclaimed",
-                        request_id,
-                        {
-                            "lease_id": lease_id,
-                            "donor_module_id": previous.donor_module_id,
-                            "borrower_module_id": previous.borrower_module_id,
-                            "reclaimed_tokens": reclaimed,
-                            "release_pipeline": list(previous.release_pipeline),
-                        },
-                    )
-                )
-        for lease in leases:
-            previous = self._active_leases.get(lease.lease_id)
-            granted = lease.granted_tokens - (previous.granted_tokens if previous else 0)
-            if granted > 0:
-                events.append(
-                    self._event(
-                        "lease.granted",
-                        request_id,
-                        {
-                            "lease_id": lease.lease_id,
-                            "donor_module_id": lease.donor_module_id,
-                            "borrower_module_id": lease.borrower_module_id,
-                            "granted_tokens": granted,
-                            "release_pipeline": list(lease.release_pipeline),
-                        },
-                    )
-                )
-        self._active_leases = next_by_id
-        return events
+    @property
+    def native(self) -> NativeArena:
+        return self._native
 
     def prepare(
         self,
@@ -241,206 +136,244 @@ class ContextLeaseArena:
         contributions: Iterable[ModuleContribution],
         *,
         request_id: str | None = None,
-    ) -> PreparedContext:
-        """Prepare one immutable context transaction.
-
-        A single arena may be shared across request threads. Stateful lease,
-        change-rate, snapshot, and trace updates are serialized per instance.
-        """
+    ) -> PreparedContextPlan:
+        payload = self._request_payload(model, tuple(contributions), request_id)
         with self._prepare_lock:
-            return self._prepare_locked(model, contributions, request_id=request_id)
+            try:
+                begin = self._native.prepare_begin(payload)
+                if begin["status"] == "ready":
+                    raw = begin["prepared"]
+                else:
+                    semantic_results = [
+                        self._summarize(item) for item in begin.get("semantic_requests", ())
+                    ]
+                    raw = self._native.prepare_commit(payload, semantic_results)
+            except NativeContextLeaseError as error:
+                self._raise_native(error)
+            prepared = self._prepared(raw)
+            self.observations.publish_many(prepared.trace_events)
+            self.observations.publish_snapshot(prepared.snapshot)
+            return prepared
 
-    def _prepare_locked(
-        self,
-        model: ModelProfile,
-        contributions: Iterable[ModuleContribution],
-        *,
-        request_id: str | None = None,
-    ) -> PreparedContext:
-        request_id = request_id or uuid.uuid4().hex
-        validate_model_budget(self.layout, model.input_budget_tokens)
-        contribution_by_id = self._validate_contributions(contributions)
-        events = [
-            self._event(
-                "request.started",
-                request_id,
-                {"model_profile_id": model.model_profile_id, "token_count_mode": model.count_mode.value},
+    def record_usage(self, request_id: str, actual_input_tokens: int) -> UsageCalibration:
+        with self._prepare_lock:
+            try:
+                value = self._native.record_usage(request_id, actual_input_tokens)
+                arena_id = self.layout.definition.arena_id
+                existing = self.observations.events_after(arena_id, 0, 10_000)
+                after_seq = existing[-1].seq if existing else 0
+                raw_events = self._native.events(after_seq=after_seq)
+                raw_snapshot = self._native.snapshot()
+            except NativeContextLeaseError as error:
+                self._raise_native(error)
+            instance_id = self._instance_id_override or str(
+                raw_snapshot["instance_id"] if raw_snapshot else ""
             )
-        ]
+            self.observations.publish_many(
+                self._event(item, instance_id) for item in raw_events
+            )
+            if raw_snapshot:
+                self.observations.publish_snapshot(
+                    self._snapshot(raw_snapshot, instance_id)
+                )
+        calibration = _calibration(value)
+        assert calibration is not None
+        return calibration
 
-        demands: dict[str, int] = {}
-        original_chunks: dict[str, tuple[PromptChunk, ...]] = {}
-        for module_id in self.layout.ordered_module_ids:
-            contribution = contribution_by_id.get(module_id)
-            chunks = contribution.chunks if contribution else ()
-            original_chunks[module_id] = chunks
-            calculated = sum(self.token_counter.count_content(chunk.content) for chunk in chunks)
-            demands[module_id] = (
-                contribution.observed_demand_tokens
-                if contribution and contribution.observed_demand_tokens is not None
-                else calculated
-            )
-            events.append(
-                self._event(
-                    "demand.observed",
-                    request_id,
-                    {"module_id": module_id, "demanded_tokens": demands[module_id]},
-                    EventPriority.GAUGE,
-                )
-            )
+    def close(self) -> None:
+        self._native.close()
 
-        nonempty_module_count = sum(1 for demand in demands.values() if demand > 0)
-        render_separator_tokens = self.token_counter.count_text(
-            "\n\n" * max(0, nonempty_module_count - 1)
-        )
-        allocation_budget = model.input_budget_tokens - render_separator_tokens
-        validate_model_budget(self.layout, allocation_budget)
-        allocation_result = allocate_budget(self.layout, demands, allocation_budget)
-        allocation_by_id = {item.module_id: item for item in allocation_result.allocations}
-        events.extend(self._lease_events(allocation_result.leases, request_id))
+    def __enter__(self) -> "ContextLeaseArena":
+        return self
 
-        final_chunks: dict[str, tuple[PromptChunk, ...]] = {}
-        usage_rows: list[ModuleUsage] = []
-        now = datetime.now(UTC)
-        for module_id in self.layout.ordered_module_ids:
-            allocation = allocation_by_id[module_id]
-            chunks = original_chunks[module_id]
-            before = sum(self.token_counter.count_content(chunk.content) for chunk in chunks)
-            after = before
-            compression_trace: Mapping[str, Any] = {"status": "not_needed"}
-            if before > allocation.allocated_tokens:
-                chunks, before, after, compression_trace = self._compress_module(
-                    module_id, chunks, allocation
-                )
-                events.append(
-                    self._event(
-                        "chunk.compressed",
-                        request_id,
-                        {
-                            "module_id": module_id,
-                            "before_tokens": before,
-                            "after_tokens": after,
-                            "target_tokens": allocation.allocated_tokens,
-                            "trace": compression_trace,
-                        },
-                    )
-                )
-            final_chunks[module_id] = chunks
-            fixed_tokens = sum(
-                self.token_counter.count_content(chunk.content) for chunk in chunks if chunk.fixed
-            )
-            pinned_tokens = sum(
-                self.token_counter.count_content(chunk.content)
-                for chunk in chunks
-                if chunk.protection == ProtectionPolicy.PINNED
-            )
-            previous = self._previous_usage.get(module_id, after)
-            change_rate = (after - previous) / max(1, previous)
-            self._previous_usage[module_id] = after
-            usage_rows.append(
-                ModuleUsage(
-                    module_id=module_id,
-                    floor_tokens=allocation.floor_tokens,
-                    target_tokens=allocation.target_tokens,
-                    max_tokens=allocation.max_tokens,
-                    allocated_tokens=allocation.allocated_tokens,
-                    demanded_tokens=allocation.demanded_tokens,
-                    used_tokens=after,
-                    fixed_tokens=fixed_tokens,
-                    variable_tokens=max(0, after - fixed_tokens),
-                    pinned_tokens=pinned_tokens,
-                    elastic_tokens=max(0, after - pinned_tokens),
-                    reclaimable_tokens=max(0, after - pinned_tokens),
-                    minimum_retained_tokens=pinned_tokens,
-                    local_capacity_tokens=allocation.local_capacity_tokens,
-                    borrowed_capacity_tokens=allocation.borrowed_capacity_tokens,
-                    lent_capacity_tokens=allocation.lent_capacity_tokens,
-                    compressed_from_tokens=before,
-                    compressed_to_tokens=after,
-                    compression_ratio=(after / before) if before else 1.0,
-                    change_rate=change_rate,
-                    pressure=_pressure(after, allocation.allocated_tokens),
-                    last_updated_at=now,
-                )
-            )
-            events.append(
-                self._event(
-                    "allocation.granted",
-                    request_id,
-                    {
-                        "module_id": module_id,
-                        "allocated_tokens": allocation.allocated_tokens,
-                        "used_tokens": after,
-                        "borrowed_capacity_tokens": allocation.borrowed_capacity_tokens,
-                    },
-                    EventPriority.GAUGE,
-                )
-            )
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
-        rendered_modules = []
-        for module_id in self.layout.ordered_module_ids:
-            content = "\n\n".join(_render_content(chunk.content) for chunk in final_chunks[module_id])
-            if content:
-                rendered_modules.append(content)
-        rendered = "\n\n".join(rendered_modules)
-        prompt_tokens = self.token_counter.count_text(rendered)
-        usable_budget = model.input_budget_tokens - self.layout.definition.framework_reserve_tokens
-        if prompt_tokens > usable_budget:
-            raise AdmissionError(
-                f"rendered prompt needs {prompt_tokens} tokens, usable input budget is {usable_budget}"
-            )
-        events.append(
-            self._event(
-                "context.rendered",
-                request_id,
-                {
-                    "prompt_tokens": prompt_tokens,
-                    "input_budget_tokens": usable_budget,
-                    "render_separator_tokens": render_separator_tokens,
+    def _summarize(self, value: Mapping[str, Any]) -> dict[str, str]:
+        options = dict(value.get("options", {}))
+        provider = self.summary_providers.get(str(value["provider_id"]))
+        response = provider.summarize(
+            SummaryRequest(
+                content=str(value["source_text"]),
+                target_tokens=int(value["target_tokens"]),
+                instructions=str(
+                    options.get("instructions", "Preserve facts, qualifiers, and unresolved items.")
+                ),
+                required_terms=tuple(map(str, value.get("required_terms", ()))),
+                temperature=float(options.get("temperature", 0.0)),
+                metadata={
+                    "arena_id": self.layout.definition.arena_id,
+                    "module_id": value["module_id"],
+                    "algorithm_id": value["algorithm_id"],
                 },
             )
         )
-        events.append(self._event("request.completed", request_id, {"status": "completed"}))
+        return {
+            "semantic_request_id": str(value["semantic_request_id"]),
+            "content": response.text,
+        }
 
-        self._snapshot_seq += 1
-        snapshot = ArenaSnapshot(
-            schema_version="1.0",
-            arena_id=self.layout.definition.arena_id,
-            instance_id=self.instance_id,
-            snapshot_seq=self._snapshot_seq,
-            captured_at=now,
-            request_id=request_id,
-            model_profile_id=model.model_profile_id,
-            tokenizer_id=model.tokenizer_id,
-            token_count_mode=model.count_mode,
-            layout_hash=self.layout.layout_hash,
-            policy_version=self.layout.definition.policy_version,
-            context_limit_tokens=model.context_limit_tokens,
-            reserved_output_tokens=model.reserved_output_tokens,
-            framework_reserve_tokens=self.layout.definition.framework_reserve_tokens,
-            input_budget_tokens=usable_budget,
-            used_tokens=prompt_tokens,
-            slack_tokens=max(0, usable_budget - prompt_tokens),
-            utilization=prompt_tokens / max(1, usable_budget),
-            pressure=_pressure(prompt_tokens, usable_budget),
-            modules=tuple(usage_rows),
-            leases=allocation_result.leases,
-            health={"events_dropped": 0},
-        )
-        self.observations.publish_many(events)
-        self.observations.publish_snapshot(snapshot)
-        return PreparedContext(
-            arena_id=self.layout.definition.arena_id,
-            instance_id=self.instance_id,
-            request_id=request_id,
-            layout_hash=self.layout.layout_hash,
-            policy_version=self.layout.definition.policy_version,
-            rendered=rendered,
-            prompt_tokens=prompt_tokens,
-            input_budget_tokens=usable_budget,
-            allocations=allocation_result.allocations,
-            leases=allocation_result.leases,
-            module_contents=final_chunks,
-            trace_events=tuple(events),
+    def _request_payload(
+        self,
+        model: ModelProfile,
+        contributions: tuple[ModuleContribution, ...],
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "model": to_public_dict(model),
+            "contributions": [
+                {
+                    "module_id": contribution.module_id,
+                    "observed_demand_tokens": contribution.observed_demand_tokens,
+                    "metadata": to_public_dict(contribution.metadata),
+                    "chunks": [
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "content": to_public_dict(chunk.content),
+                            "kind": chunk.kind,
+                            "fixed": chunk.fixed,
+                            "protection": chunk.protection.value,
+                            "priority": chunk.priority,
+                            "required_terms": list(chunk.required_terms),
+                            "dependency_group": chunk.dependency_group,
+                            "metadata": to_public_dict(chunk.metadata),
+                        }
+                        for chunk in contribution.chunks
+                    ],
+                }
+                for contribution in contributions
+            ],
+        }
+
+    def _prepared(self, value: Mapping[str, Any]) -> PreparedContextPlan:
+        allocations = tuple(_allocation(item) for item in value["allocations"])
+        leases = tuple(_lease(item) for item in value["leases"])
+        usages = tuple(_usage(item) for item in value["modules"])
+        plans: list[PreparedModulePlan] = []
+        for item in value["module_plans"]:
+            chunks = tuple(
+                PreparedChunk(
+                    chunk_id=str(chunk["chunk_id"]),
+                    kind=str(chunk["kind"]),
+                    content=chunk["content"],
+                    fixed=bool(chunk["fixed"]),
+                    protection=ProtectionPolicy(chunk["protection"]),
+                    priority=float(chunk["priority"]),
+                    required_terms=tuple(map(str, chunk.get("required_terms", ()))),
+                    dependency_group=chunk.get("dependency_group"),
+                    metadata=dict(chunk.get("metadata", {})),
+                    token_count=int(chunk["token_count"]),
+                    compressed=bool(chunk["compressed"]),
+                    source_chunk_ids=tuple(map(str, chunk.get("source_chunk_ids", ()))),
+                )
+                for chunk in item["chunks"]
+            )
+            allocation = _allocation(item["allocation"])
+            usage = _usage(item["usage"])
+            plans.append(
+                PreparedModulePlan(
+                    module_id=str(item["module_id"]),
+                    render_target=RenderTarget(item["render_target"]),
+                    allocation=allocation,
+                    usage=usage,
+                    chunks=chunks,
+                )
+            )
+        instance_id = self._instance_id_override or str(value["instance_id"])
+        events = tuple(self._event(item, instance_id) for item in value.get("trace_events", ()))
+        snapshot = self._snapshot(value["snapshot"], instance_id)
+        return PreparedContextPlan(
+            schema_version=str(value["schema_version"]),
+            core_version=str(value["core_version"]),
+            arena_id=str(value["arena_id"]),
+            instance_id=instance_id,
+            request_id=str(value["request_id"]),
+            layout_hash=str(value["layout_hash"]),
+            policy_version=str(value["policy_version"]),
+            model_profile_id=str(value["model_profile_id"]),
+            tokenizer_id=str(value["tokenizer_id"]),
+            tokenizer_version=str(value["tokenizer_version"]),
+            token_count_mode=CountMode(value["token_count_mode"]),
+            context_limit_tokens=int(value["context_limit_tokens"]),
+            reserved_output_tokens=int(value["reserved_output_tokens"]),
+            framework_reserve_tokens=int(value["framework_reserve_tokens"]),
+            rendered=str(value["rendered"]),
+            prompt_tokens=int(value["prompt_tokens"]),
+            input_budget_tokens=int(value["input_budget_tokens"]),
+            slack_tokens=int(value["slack_tokens"]),
+            pressure=Pressure(value["pressure"]),
+            allocations=allocations,
+            leases=leases,
+            modules=usages,
+            module_plans=tuple(plans),
+            trace_events=events,
             snapshot=snapshot,
+            calibration=_calibration(value.get("calibration")),
         )
+
+    def _event(self, value: Mapping[str, Any], instance_id: str) -> TraceEvent:
+        return TraceEvent(
+            event_id=str(value["event_id"]),
+            seq=int(value["seq"]),
+            occurred_at=_datetime(value.get("occurred_at")),
+            arena_id=str(value["arena_id"]),
+            instance_id=instance_id,
+            request_id=value.get("request_id"),
+            event_type=str(value["event_type"]),
+            schema_version=str(value["schema_version"]),
+            layout_hash=str(value["layout_hash"]),
+            policy_version=str(value["policy_version"]),
+            payload=dict(value.get("payload", {})),
+            priority=EventPriority(value.get("priority", "state")),
+        )
+
+    def _snapshot(self, value: Mapping[str, Any], instance_id: str) -> ArenaSnapshot:
+        return ArenaSnapshot(
+            schema_version=str(value["schema_version"]),
+            arena_id=str(value["arena_id"]),
+            instance_id=instance_id,
+            snapshot_seq=int(value["snapshot_seq"]),
+            captured_at=_datetime(value.get("captured_at")),
+            request_id=value.get("request_id"),
+            model_profile_id=str(value["model_profile_id"]),
+            tokenizer_id=str(value["tokenizer_id"]),
+            tokenizer_version=str(value["tokenizer_version"]),
+            token_count_mode=CountMode(value["token_count_mode"]),
+            layout_hash=str(value["layout_hash"]),
+            policy_version=str(value["policy_version"]),
+            context_limit_tokens=int(value["context_limit_tokens"]),
+            reserved_output_tokens=int(value["reserved_output_tokens"]),
+            framework_reserve_tokens=int(value["framework_reserve_tokens"]),
+            input_budget_tokens=int(value["input_budget_tokens"]),
+            used_tokens=int(value["used_tokens"]),
+            slack_tokens=int(value["slack_tokens"]),
+            utilization=float(value["utilization"]),
+            pressure=Pressure(value["pressure"]),
+            modules=tuple(_usage(item) for item in value["modules"]),
+            leases=tuple(_lease(item) for item in value["leases"]),
+            calibration=_calibration(value.get("calibration")),
+            health=dict(value.get("health", {})),
+        )
+
+    @staticmethod
+    def _raise_native(error: NativeContextLeaseError) -> None:
+        message = str(error)
+        try:
+            envelope = json.loads(message)
+            code = str(envelope.get("code", "native_error"))
+            detail = str(envelope.get("message", message))
+        except json.JSONDecodeError:
+            code, detail = "native_error", message
+        if code == "admission_error":
+            raise AdmissionError(detail) from error
+        if code == "layout_validation_error":
+            raise LayoutValidationError(detail) from error
+        if code in {
+            "configuration_error",
+            "tokenizer_unavailable",
+            "usage_observation_unknown",
+        }:
+            raise ConfigurationError(detail) from error
+        raise NativeContextLeaseError(detail) from error

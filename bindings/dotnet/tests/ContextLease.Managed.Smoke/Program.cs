@@ -22,6 +22,18 @@ if (!prepared.GetProperty("rendered").GetString()!.Contains(expected.GetProperty
 if (!prepared.GetProperty("leases").EnumerateArray().Any(
         lease => lease.GetProperty("borrower_module_id").GetString() == expected.GetProperty("lease_borrower").GetString()))
     throw new InvalidOperationException("Expected lease was not issued.");
+if (!prepared.GetProperty("module_plans").EnumerateArray().Any())
+    throw new InvalidOperationException("Structured module plan was not returned.");
+using JsonDocument snapshot = JsonDocument.Parse(arena.SnapshotJson());
+if (snapshot.RootElement.GetProperty("request_id").GetString() != "fixture-basic")
+    throw new InvalidOperationException("Native snapshot is not current.");
+using JsonDocument events = JsonDocument.Parse(arena.EventsJson());
+if (!events.RootElement.EnumerateArray().Any(item => item.GetProperty("event_type").GetString() == "request.prepared"))
+    throw new InvalidOperationException("Native event stream is missing request.prepared.");
+using JsonDocument calibration = JsonDocument.Parse(
+    arena.RecordUsageJson("{\"request_id\":\"fixture-basic\",\"actual_input_tokens\":8}"));
+if (calibration.RootElement.GetProperty("sample_count").GetUInt64() != 1)
+    throw new InvalidOperationException("Usage calibration was not recorded.");
 
 Console.WriteLine($"ContextLease .NET smoke passed: ABI={ContextLeaseArena.AbiVersion}, core={ContextLeaseArena.CoreVersion}");
 
@@ -47,3 +59,16 @@ using JsonDocument committed = JsonDocument.Parse(
 if (!committed.RootElement.GetProperty("rendered").GetString()!.Contains("alpha"))
     throw new InvalidOperationException("Two-phase semantic result lost a required term.");
 Console.WriteLine("ContextLease .NET semantic two-phase smoke passed");
+
+const string exactDefinition = """
+{"arena_id":"dotnet-exact","modules":[{"module_id":"memory","floor_tokens":0,"target_tokens":20,"max_tokens":20}]}
+""";
+const string exactRequest = """
+{"request_id":"dotnet-exact-r1","model":{"model_profile_id":"char","context_limit_tokens":20,"reserved_output_tokens":0,"tokenizer_id":"character-v1","tokenizer_version":"1","count_mode":"exact"},"contributions":[{"module_id":"memory","chunks":[{"chunk_id":"facts","content":"alpha beta"}]}]}
+""";
+using var exactArena = new ContextLeaseArena(exactDefinition);
+exactArena.SetTokenCounter(text => text.Length);
+using JsonDocument exact = JsonDocument.Parse(exactArena.PrepareJson(exactRequest));
+if (exact.RootElement.GetProperty("prompt_tokens").GetInt32() != "alpha beta".Length)
+    throw new InvalidOperationException("Exact tokenizer callback was not used.");
+Console.WriteLine("ContextLease .NET exact tokenizer smoke passed");

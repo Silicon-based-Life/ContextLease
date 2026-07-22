@@ -24,13 +24,17 @@ from .models import (
     ModelProfile,
     ModuleContribution,
     ModuleDefinition,
+    ContextPlan,
     PreparedContext,
+    PreparedContextPlan,
+    PreparedModulePlan,
+    PreparedChunk,
     PromptChunk,
 )
 from .native import NativeArena, NativeContextLeaseError
 from .observation import ObservationStore
 from .runtime import ContextLeaseArena
-from .tokenization import CharacterTokenCounter, RegexTokenCounter
+from .tokenization import CharacterTokenCounter, RegexTokenCounter, TiktokenTokenCounter
 
 __all__ = [
     "AdmissionError", "AllocationResult", "AllocationStrategy", "ArenaDefinition",
@@ -38,8 +42,10 @@ __all__ = [
     "ContextLeaseArena", "ContextLeaseError", "CountMode", "LayoutValidationError", "LifecyclePolicy",
     "ModelProfile", "ModuleContribution", "ModuleDefinition", "NativeArena",
     "NativeContextLeaseError", "ObservationStore",
-    "PreparedContext", "PromptChunk", "ProtectionPolicy", "ProviderError",
-    "ReclaimPolicy", "RegexTokenCounter", "RenderTarget", "allocate_budget", "compile_layout",
+    "ContextPlan", "PreparedChunk", "PreparedContext", "PreparedContextPlan",
+    "PreparedModulePlan", "PromptChunk", "ProtectionPolicy", "ProviderError",
+    "ReclaimPolicy", "RegexTokenCounter", "RenderTarget", "TiktokenTokenCounter",
+    "allocate_budget", "compile_layout",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

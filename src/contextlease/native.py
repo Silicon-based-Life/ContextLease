@@ -1,9 +1,4 @@
-"""In-process binding for the Rust ContextLease core.
-
-The high-level Python implementation remains available while the Rust migration
-is staged.  This module is the stable bridge used by cross-language conformance
-tests and by applications that opt into the native core.
-"""
+"""In-process binding for the canonical Rust ContextLease core (ABI v2)."""
 
 from __future__ import annotations
 
@@ -13,6 +8,8 @@ import os
 import platform
 from pathlib import Path
 from typing import Any, Mapping
+
+from .tokenization import TokenCounter
 
 
 class NativeContextLeaseError(RuntimeError):
@@ -33,6 +30,8 @@ def _candidate_paths() -> list[Path]:
     candidates = [Path(override)] if override else []
     package_dir = Path(__file__).resolve().parent
     candidates.extend((package_dir / _library_name(), package_dir / "native" / _library_name()))
+    checkout_root = package_dir.parents[1]
+    candidates.append(checkout_root / "target" / "release" / _library_name())
     return candidates
 
 
@@ -51,8 +50,16 @@ class NativeArena:
 
     def __init__(self, definition: Mapping[str, Any], *, library_path: str | None = None) -> None:
         self._lib = _load_library(library_path)
+        self._lib.cl_abi_version.restype = ctypes.c_uint32
+        actual_abi = int(self._lib.cl_abi_version())
+        if actual_abi != 2:
+            raise NativeContextLeaseError(
+                f"unsupported ContextLease ABI {actual_abi}; expected 2"
+            )
         self._configure_abi()
         self._handle = ctypes.c_void_p()
+        self._token_callback: Any | None = None
+        self._token_callback_error: Exception | None = None
         payload = json.dumps(definition, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         code = self._lib.cl_arena_create(payload, ctypes.byref(self._handle))
         self._check(code)
@@ -66,7 +73,9 @@ class NativeArena:
             raise NativeContextLeaseError("native arena is closed")
         payload = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         result_ptr = ctypes.c_void_p()
+        self._token_callback_error = None
         code = self._lib.cl_arena_prepare(self._handle, payload, ctypes.byref(result_ptr))
+        self._check_token_callback()
         self._check(code)
         try:
             text = ctypes.string_at(result_ptr).decode("utf-8")
@@ -80,7 +89,9 @@ class NativeArena:
             raise NativeContextLeaseError("native arena is closed")
         payload = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         result_ptr = ctypes.c_void_p()
+        self._token_callback_error = None
         code = self._lib.cl_arena_prepare_begin(self._handle, payload, ctypes.byref(result_ptr))
+        self._check_token_callback()
         self._check(code)
         try:
             return json.loads(ctypes.string_at(result_ptr).decode("utf-8"))
@@ -98,22 +109,64 @@ class NativeArena:
         request_payload = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         results_payload = json.dumps(semantic_results, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         result_ptr = ctypes.c_void_p()
+        self._token_callback_error = None
         code = self._lib.cl_arena_prepare_commit(
             self._handle,
             request_payload,
             results_payload,
             ctypes.byref(result_ptr),
         )
+        self._check_token_callback()
         self._check(code)
         try:
             return json.loads(ctypes.string_at(result_ptr).decode("utf-8"))
         finally:
             self._lib.cl_string_free(result_ptr)
 
+    def set_token_counter(self, counter: TokenCounter) -> None:
+        """Register a synchronous host tokenizer used by exact/hybrid plans."""
+        if not self._handle:
+            raise NativeContextLeaseError("native arena is closed")
+
+        def count_text(raw: bytes | None, _user_data: int) -> int:
+            try:
+                text = raw.decode("utf-8") if raw else ""
+                return max(0, int(counter.count_text(text)))
+            except Exception as error:
+                self._token_callback_error = error
+                return -1
+
+        self._token_callback = self._TOKEN_CALLBACK(count_text)
+        self._check(
+            self._lib.cl_arena_set_token_counter(
+                self._handle, self._token_callback, ctypes.c_void_p()
+            )
+        )
+
+    def snapshot(self) -> dict[str, Any] | None:
+        return self._json_output(self._lib.cl_arena_snapshot_json, self._handle)
+
+    def events(self, *, after_seq: int = 0, limit: int = 1000) -> list[dict[str, Any]]:
+        return self._json_output(
+            self._lib.cl_arena_events_json,
+            self._handle,
+            ctypes.c_uint64(max(0, after_seq)),
+            ctypes.c_uint32(max(1, min(limit, 10_000))),
+        )
+
+    def record_usage(self, request_id: str, actual_input_tokens: int) -> dict[str, Any]:
+        payload = json.dumps(
+            {"request_id": request_id, "actual_input_tokens": actual_input_tokens},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return self._json_output(self._lib.cl_arena_record_usage, self._handle, payload)
+
     def close(self) -> None:
         if self._handle:
             self._lib.cl_arena_free(self._handle)
             self._handle = ctypes.c_void_p()
+            self._token_callback = None
+            self._token_callback_error = None
 
     def __enter__(self) -> "NativeArena":
         return self
@@ -121,7 +174,16 @@ class NativeArena:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def _configure_abi(self) -> None:
+        self._TOKEN_CALLBACK = ctypes.CFUNCTYPE(
+            ctypes.c_int32, ctypes.c_char_p, ctypes.c_void_p
+        )
         self._lib.cl_abi_version.restype = ctypes.c_uint32
         self._lib.cl_arena_create.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
         self._lib.cl_arena_create.restype = ctypes.c_int32
@@ -136,9 +198,43 @@ class NativeArena:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._lib.cl_arena_prepare_commit.restype = ctypes.c_int32
+        self._lib.cl_arena_set_token_counter.argtypes = [
+            ctypes.c_void_p,
+            self._TOKEN_CALLBACK,
+            ctypes.c_void_p,
+        ]
+        self._lib.cl_arena_set_token_counter.restype = ctypes.c_int32
+        self._lib.cl_arena_snapshot_json.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._lib.cl_arena_snapshot_json.restype = ctypes.c_int32
+        self._lib.cl_arena_events_json.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._lib.cl_arena_events_json.restype = ctypes.c_int32
+        self._lib.cl_arena_record_usage.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._lib.cl_arena_record_usage.restype = ctypes.c_int32
         self._lib.cl_arena_free.argtypes = [ctypes.c_void_p]
         self._lib.cl_string_free.argtypes = [ctypes.c_void_p]
         self._lib.cl_last_error.restype = ctypes.c_char_p
+
+    def _json_output(self, function: Any, *args: Any) -> Any:
+        if not self._handle:
+            raise NativeContextLeaseError("native arena is closed")
+        result_ptr = ctypes.c_void_p()
+        self._check(function(*args, ctypes.byref(result_ptr)))
+        try:
+            return json.loads(ctypes.string_at(result_ptr).decode("utf-8"))
+        finally:
+            self._lib.cl_string_free(result_ptr)
 
     def _check(self, code: int) -> None:
         if code == 0:
@@ -146,3 +242,9 @@ class NativeArena:
         raw = self._lib.cl_last_error()
         detail = raw.decode("utf-8", errors="replace") if raw else f"native error {code}"
         raise NativeContextLeaseError(detail)
+
+    def _check_token_callback(self) -> None:
+        if self._token_callback_error is not None:
+            error = self._token_callback_error
+            self._token_callback_error = None
+            raise NativeContextLeaseError(f"host tokenizer callback failed: {error}") from error

@@ -1,11 +1,15 @@
-use contextlease_core::{ArenaDefinition, ContextLeaseArena, PrepareRequest, SemanticResult};
+use contextlease_core::{
+    ArenaDefinition, ContextLeaseArena, PrepareRequest, SemanticResult, TokenCounter,
+    UsageObservation,
+};
 use serde::Serialize;
 use std::cell::RefCell;
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 pub const CL_OK: i32 = 0;
 pub const CL_INVALID_ARGUMENT: i32 = 1;
 pub const CL_INVALID_JSON: i32 = 2;
@@ -14,6 +18,46 @@ pub const CL_PREPARE_ERROR: i32 = 4;
 pub const CL_PANIC: i32 = 100;
 
 thread_local! { static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").unwrap()); }
+
+pub type TokenCountCallback = unsafe extern "C" fn(*const c_char, *mut c_void) -> i32;
+
+struct HostTokenCounter {
+    callback: TokenCountCallback,
+    user_data: *mut c_void,
+    failed: AtomicBool,
+}
+
+unsafe impl Send for HostTokenCounter {}
+unsafe impl Sync for HostTokenCounter {}
+
+impl TokenCounter for HostTokenCounter {
+    fn count_text(&self, text: &str) -> i32 {
+        let safe = text.replace('\0', "\u{fffd}");
+        let value = CString::new(safe).unwrap();
+        let result = unsafe { (self.callback)(value.as_ptr(), self.user_data) };
+        if result < 0 {
+            self.failed.store(true, Ordering::Release);
+            -1
+        } else {
+            result
+        }
+    }
+}
+
+impl HostTokenCounter {
+    fn reset(&self) {
+        self.failed.store(false, Ordering::Release);
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+}
+
+pub struct ArenaHandle {
+    core: ContextLeaseArena,
+    token_counter: Option<HostTokenCounter>,
+}
 
 #[derive(Serialize)]
 struct ErrorEnvelope<'a> {
@@ -65,10 +109,7 @@ pub extern "C" fn cl_core_version() -> *mut c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cl_arena_create(
-    json: *const c_char,
-    out: *mut *mut ContextLeaseArena,
-) -> i32 {
+pub unsafe extern "C" fn cl_arena_create(json: *const c_char, out: *mut *mut ArenaHandle) -> i32 {
     if out.is_null() {
         set_error("invalid_argument", "out arena is null");
         return CL_INVALID_ARGUMENT;
@@ -85,7 +126,10 @@ pub unsafe extern "C" fn cl_arena_create(
         };
         match ContextLeaseArena::new(definition) {
             Ok(arena) => {
-                *out = Box::into_raw(Box::new(arena));
+                *out = Box::into_raw(Box::new(ArenaHandle {
+                    core: arena,
+                    token_counter: None,
+                }));
                 CL_OK
             }
             Err(e) => {
@@ -102,7 +146,7 @@ pub unsafe extern "C" fn cl_arena_create(
 
 #[no_mangle]
 pub unsafe extern "C" fn cl_arena_prepare(
-    arena: *mut ContextLeaseArena,
+    arena: *mut ArenaHandle,
     json: *const c_char,
     out: *mut *mut c_char,
 ) -> i32 {
@@ -120,7 +164,23 @@ pub unsafe extern "C" fn cl_arena_prepare(
             Ok(v) => v,
             Err(e) => return set_json_error(e),
         };
-        match (*arena).prepare(request) {
+        let handle = &*arena;
+        let result = match handle.token_counter.as_ref() {
+            Some(counter) => {
+                counter.reset();
+                let result = handle.core.prepare_with_counter(request, counter);
+                if counter.failed() {
+                    set_error(
+                        "tokenizer_callback_failed",
+                        "host tokenizer callback returned an error",
+                    );
+                    return CL_PREPARE_ERROR;
+                }
+                result
+            }
+            None => handle.core.prepare(request),
+        };
+        match result {
             Ok(result) => match serde_json::to_string(&result) {
                 Ok(value) => {
                     *out = CString::new(value).unwrap().into_raw();
@@ -145,7 +205,7 @@ pub unsafe extern "C" fn cl_arena_prepare(
 
 #[no_mangle]
 pub unsafe extern "C" fn cl_arena_prepare_begin(
-    arena: *mut ContextLeaseArena,
+    arena: *mut ArenaHandle,
     json: *const c_char,
     out: *mut *mut c_char,
 ) -> i32 {
@@ -163,7 +223,23 @@ pub unsafe extern "C" fn cl_arena_prepare_begin(
             Ok(value) => value,
             Err(error) => return set_json_error(error),
         };
-        match (*arena).prepare_begin(request) {
+        let handle = &*arena;
+        let result = match handle.token_counter.as_ref() {
+            Some(counter) => {
+                counter.reset();
+                let result = handle.core.prepare_begin_with_counter(request, counter);
+                if counter.failed() {
+                    set_error(
+                        "tokenizer_callback_failed",
+                        "host tokenizer callback returned an error",
+                    );
+                    return CL_PREPARE_ERROR;
+                }
+                result
+            }
+            None => handle.core.prepare_begin(request),
+        };
+        match result {
             Ok(result) => write_json_result(&result, out),
             Err(error) => {
                 set_error(error.code, error.message);
@@ -179,7 +255,7 @@ pub unsafe extern "C" fn cl_arena_prepare_begin(
 
 #[no_mangle]
 pub unsafe extern "C" fn cl_arena_prepare_commit(
-    arena: *mut ContextLeaseArena,
+    arena: *mut ArenaHandle,
     request_json: *const c_char,
     semantic_results_json: *const c_char,
     out: *mut *mut c_char,
@@ -206,7 +282,25 @@ pub unsafe extern "C" fn cl_arena_prepare_commit(
             Ok(value) => value,
             Err(error) => return set_json_error(error),
         };
-        match (*arena).prepare_commit(request, results) {
+        let handle = &*arena;
+        let result = match handle.token_counter.as_ref() {
+            Some(counter) => {
+                counter.reset();
+                let result = handle
+                    .core
+                    .prepare_commit_with_counter(request, results, counter);
+                if counter.failed() {
+                    set_error(
+                        "tokenizer_callback_failed",
+                        "host tokenizer callback returned an error",
+                    );
+                    return CL_PREPARE_ERROR;
+                }
+                result
+            }
+            None => handle.core.prepare_commit(request, results),
+        };
+        match result {
             Ok(result) => write_json_result(&result, out),
             Err(error) => {
                 set_error(error.code, error.message);
@@ -234,7 +328,115 @@ unsafe fn write_json_result<T: Serialize>(value: &T, out: *mut *mut c_char) -> i
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cl_arena_free(arena: *mut ContextLeaseArena) {
+pub unsafe extern "C" fn cl_arena_set_token_counter(
+    arena: *mut ArenaHandle,
+    callback: Option<TokenCountCallback>,
+    user_data: *mut c_void,
+) -> i32 {
+    if arena.is_null() {
+        set_error("invalid_argument", "arena is null");
+        return CL_INVALID_ARGUMENT;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        (*arena).token_counter = callback.map(|callback| HostTokenCounter {
+            callback,
+            user_data,
+            failed: AtomicBool::new(false),
+        });
+        CL_OK
+    }))
+    .unwrap_or_else(|_| {
+        set_error("panic", "panic contained at FFI boundary");
+        CL_PANIC
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cl_arena_snapshot_json(
+    arena: *mut ArenaHandle,
+    out: *mut *mut c_char,
+) -> i32 {
+    if arena.is_null() || out.is_null() {
+        set_error("invalid_argument", "arena/result is null");
+        return CL_INVALID_ARGUMENT;
+    }
+    *out = ptr::null_mut();
+    catch_unwind(AssertUnwindSafe(|| match (*arena).core.snapshot() {
+        Ok(snapshot) => write_json_result(&snapshot, out),
+        Err(error) => {
+            set_error(error.code, error.message);
+            CL_PREPARE_ERROR
+        }
+    }))
+    .unwrap_or_else(|_| {
+        set_error("panic", "panic contained at FFI boundary");
+        CL_PANIC
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cl_arena_events_json(
+    arena: *mut ArenaHandle,
+    after_seq: u64,
+    limit: u32,
+    out: *mut *mut c_char,
+) -> i32 {
+    if arena.is_null() || out.is_null() {
+        set_error("invalid_argument", "arena/result is null");
+        return CL_INVALID_ARGUMENT;
+    }
+    *out = ptr::null_mut();
+    catch_unwind(AssertUnwindSafe(|| {
+        match (*arena).core.events_after(after_seq, limit as usize) {
+            Ok(events) => write_json_result(&events, out),
+            Err(error) => {
+                set_error(error.code, error.message);
+                CL_PREPARE_ERROR
+            }
+        }
+    }))
+    .unwrap_or_else(|_| {
+        set_error("panic", "panic contained at FFI boundary");
+        CL_PANIC
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cl_arena_record_usage(
+    arena: *mut ArenaHandle,
+    observation_json: *const c_char,
+    out: *mut *mut c_char,
+) -> i32 {
+    if arena.is_null() || out.is_null() {
+        set_error("invalid_argument", "arena/result is null");
+        return CL_INVALID_ARGUMENT;
+    }
+    *out = ptr::null_mut();
+    catch_unwind(AssertUnwindSafe(|| {
+        let text = match utf8(observation_json, "observation_json") {
+            Ok(value) => value,
+            Err(code) => return code,
+        };
+        let observation: UsageObservation = match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(error) => return set_json_error(error),
+        };
+        match (*arena).core.record_usage(observation) {
+            Ok(calibration) => write_json_result(&calibration, out),
+            Err(error) => {
+                set_error(error.code, error.message);
+                CL_PREPARE_ERROR
+            }
+        }
+    }))
+    .unwrap_or_else(|_| {
+        set_error("panic", "panic contained at FFI boundary");
+        CL_PANIC
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cl_arena_free(arena: *mut ArenaHandle) {
     if !arena.is_null() {
         drop(Box::from_raw(arena));
     }
