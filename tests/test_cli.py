@@ -30,6 +30,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "valid")
 
+    def test_version_uses_package_metadata(self):
+        output = io.StringIO()
+        with self.assertRaises(SystemExit) as exit_context, redirect_stdout(output):
+            main(["--version"])
+        self.assertEqual(exit_context.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(), "contextlease 0.2.0")
+
     def test_prepare_hides_content_by_default(self):
         output = io.StringIO()
         with redirect_stdout(output):

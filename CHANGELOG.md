@@ -2,6 +2,21 @@
 
 All notable changes are documented here. The project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Use isolated PEP 517 builds in CI so Python 3.12–3.14 and wheel jobs do not depend on runner-preinstalled `setuptools`.
+- Align the public Python enum values with the bundled JSON Schema while retaining source-compatible alpha enum aliases.
+- Preserve lifecycle, allocation, reclaim, render-target, model-counting, metadata, and chunk-kind fields in the Rust core.
+- Reject unknown configuration fields in both Python and Rust instead of silently ignoring them.
+- Derive the CLI version from package metadata rather than a stale literal.
+
+### Added
+
+- Cross-language contract fixture covering all previously drifting fields and canonical layout-hash parity.
+- Richer native prepared-context allocation, lease, model, tokenizer, and module-usage telemetry.
+
 ## [0.2.0] - 2026-07-20
 
 ### Added

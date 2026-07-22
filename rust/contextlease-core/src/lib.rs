@@ -8,6 +8,7 @@ use std::sync::Mutex;
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CompressionStepSpec {
     pub algorithm_id: String,
     #[serde(default)]
@@ -15,6 +16,7 @@ pub struct CompressionStepSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleDefinition {
     pub module_id: String,
     pub floor_tokens: i32,
@@ -24,17 +26,28 @@ pub struct ModuleDefinition {
     pub order: i32,
     #[serde(default = "one_f64")]
     pub weight: f64,
+    #[serde(default = "request_lifecycle")]
+    pub lifecycle: String,
+    #[serde(default = "weighted_allocation")]
+    pub allocation: String,
     #[serde(default = "mixed")]
     pub protection: String,
+    #[serde(default = "builtin_reclaim")]
+    pub reclaim: String,
+    #[serde(default = "text_render_target")]
+    pub render_target: String,
     #[serde(default = "yes")]
     pub can_borrow: bool,
     #[serde(default = "yes")]
     pub can_lend: bool,
     #[serde(default)]
     pub reclaim_pipeline: Vec<CompressionStepSpec>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArenaDefinition {
     pub arena_id: String,
     pub modules: Vec<ModuleDefinition>,
@@ -44,21 +57,33 @@ pub struct ArenaDefinition {
     pub policy_version: String,
     #[serde(default)]
     pub framework_reserve_tokens: i32,
+    #[serde(default = "reject_admission")]
+    pub admission_policy: String,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelProfile {
     pub model_profile_id: String,
     pub context_limit_tokens: i32,
     pub reserved_output_tokens: i32,
     #[serde(default = "tokenizer")]
     pub tokenizer_id: String,
+    #[serde(default = "tokenizer_v1")]
+    pub tokenizer_version: String,
+    #[serde(default = "estimated_count_mode")]
+    pub count_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromptChunk {
     pub chunk_id: String,
     pub content: Value,
+    #[serde(default = "text_kind")]
+    pub kind: String,
     #[serde(default)]
     pub fixed: bool,
     #[serde(default = "elastic")]
@@ -69,18 +94,24 @@ pub struct PromptChunk {
     pub required_terms: Vec<String>,
     #[serde(default)]
     pub dependency_group: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleContribution {
     pub module_id: String,
     #[serde(default)]
     pub chunks: Vec<PromptChunk>,
     #[serde(default)]
     pub observed_demand_tokens: Option<i32>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PrepareRequest {
     pub model: ModelProfile,
     #[serde(default)]
@@ -103,6 +134,7 @@ pub struct SemanticRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SemanticResult {
     pub semantic_request_id: String,
     pub content: String,
@@ -120,6 +152,9 @@ pub struct PrepareBeginOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModuleAllocation {
     pub module_id: String,
+    pub floor_tokens: i32,
+    pub target_tokens: i32,
+    pub max_tokens: i32,
     pub demanded_tokens: i32,
     pub allocated_tokens: i32,
     pub local_capacity_tokens: i32,
@@ -133,20 +168,35 @@ pub struct Lease {
     pub donor_module_id: String,
     pub borrower_module_id: String,
     pub granted_tokens: i32,
+    pub currently_used_tokens: i32,
+    pub reclaimable_tokens: i32,
     pub release_pipeline: Vec<String>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleUsage {
     pub module_id: String,
+    pub floor_tokens: i32,
+    pub target_tokens: i32,
+    pub max_tokens: i32,
     pub demanded_tokens: i32,
     pub allocated_tokens: i32,
     pub used_tokens: i32,
     pub fixed_tokens: i32,
+    pub variable_tokens: i32,
     pub pinned_tokens: i32,
+    pub elastic_tokens: i32,
+    pub reclaimable_tokens: i32,
+    pub minimum_retained_tokens: i32,
+    pub local_capacity_tokens: i32,
+    pub borrowed_capacity_tokens: i32,
+    pub lent_capacity_tokens: i32,
     pub compressed_from_tokens: i32,
     pub compressed_to_tokens: i32,
+    pub compression_ratio: f64,
     pub change_rate: f64,
+    pub pressure: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +207,13 @@ pub struct PreparedContext {
     pub request_id: String,
     pub layout_hash: String,
     pub policy_version: String,
+    pub model_profile_id: String,
+    pub tokenizer_id: String,
+    pub tokenizer_version: String,
+    pub token_count_mode: String,
+    pub context_limit_tokens: i32,
+    pub reserved_output_tokens: i32,
+    pub framework_reserve_tokens: i32,
     pub rendered: String,
     pub prompt_tokens: i32,
     pub input_budget_tokens: i32,
@@ -206,7 +263,12 @@ pub struct ContextLeaseArena {
 impl ContextLeaseArena {
     pub fn new(definition: ArenaDefinition) -> Result<Self, ContextLeaseError> {
         validate_definition(&definition)?;
-        let canonical = serde_json::to_vec(&definition)
+        // Hash the JSON value rather than the Rust struct directly.  serde_json's
+        // map representation is key ordered, matching the Python canonical
+        // `sort_keys=True` contract used by every binding fixture.
+        let canonical_value = serde_json::to_value(&definition)
+            .map_err(|e| ContextLeaseError::new("serialization_error", e.to_string()))?;
+        let canonical = serde_json::to_vec(&canonical_value)
             .map_err(|e| ContextLeaseError::new("serialization_error", e.to_string()))?;
         let layout_hash = format!("{:x}", Sha256::digest(canonical))[..24].to_string();
         let mut order: Vec<usize> = (0..definition.modules.len()).collect();
@@ -283,6 +345,7 @@ impl ContextLeaseArena {
             .iter()
             .map(|result| (result.semantic_request_id.as_str(), result.content.as_str()))
             .collect();
+        validate_model(&request.model)?;
         let input_budget =
             request.model.context_limit_tokens - request.model.reserved_output_tokens;
         let tokenizer_id = request.model.tokenizer_id.as_str();
@@ -374,14 +437,30 @@ impl ContextLeaseArena {
                 .unwrap_or(after);
             module_usage.push(ModuleUsage {
                 module_id: module.module_id.clone(),
+                floor_tokens: allocation.floor_tokens,
+                target_tokens: allocation.target_tokens,
+                max_tokens: allocation.max_tokens,
                 demanded_tokens: allocation.demanded_tokens,
                 allocated_tokens: allocation.allocated_tokens,
                 used_tokens: after,
                 fixed_tokens,
+                variable_tokens: (after - fixed_tokens).max(0),
                 pinned_tokens,
+                elastic_tokens: (after - pinned_tokens).max(0),
+                reclaimable_tokens: (after - pinned_tokens).max(0),
+                minimum_retained_tokens: pinned_tokens,
+                local_capacity_tokens: allocation.local_capacity_tokens,
+                borrowed_capacity_tokens: allocation.borrowed_capacity_tokens,
+                lent_capacity_tokens: allocation.lent_capacity_tokens,
                 compressed_from_tokens: before,
                 compressed_to_tokens: after,
+                compression_ratio: if before == 0 {
+                    1.0
+                } else {
+                    after as f64 / before as f64
+                },
                 change_rate: (after - previous) as f64 / previous.max(1) as f64,
+                pressure: pressure(after, allocation.allocated_tokens),
             });
             final_chunks.insert(module.module_id.clone(), chunks);
         }
@@ -422,6 +501,13 @@ impl ContextLeaseArena {
             request_id,
             layout_hash: self.layout_hash.clone(),
             policy_version: self.definition.policy_version.clone(),
+            model_profile_id: request.model.model_profile_id,
+            tokenizer_id: request.model.tokenizer_id,
+            tokenizer_version: request.model.tokenizer_version,
+            token_count_mode: request.model.count_mode,
+            context_limit_tokens: request.model.context_limit_tokens,
+            reserved_output_tokens: request.model.reserved_output_tokens,
+            framework_reserve_tokens: self.definition.framework_reserve_tokens,
             rendered,
             prompt_tokens,
             input_budget_tokens: usable,
@@ -437,6 +523,7 @@ impl ContextLeaseArena {
         &self,
         request: &PrepareRequest,
     ) -> Result<Vec<SemanticRequest>, ContextLeaseError> {
+        validate_model(&request.model)?;
         let input_budget =
             request.model.context_limit_tokens - request.model.reserved_output_tokens;
         let tokenizer_id = request.model.tokenizer_id.as_str();
@@ -638,6 +725,9 @@ fn allocate(
         .into_iter()
         .map(|m| ModuleAllocation {
             module_id: m.module_id.clone(),
+            floor_tokens: m.floor_tokens,
+            target_tokens: m.target_tokens,
+            max_tokens: m.max_tokens,
             demanded_tokens: demands[&m.module_id],
             allocated_tokens: current[&m.module_id],
             local_capacity_tokens: (current[&m.module_id] - borrowed[&m.module_id]).max(0),
@@ -693,11 +783,14 @@ fn lease(hash: &str, donor: &str, borrower: &ModuleDefinition, grant: i32) -> Le
         donor_module_id: donor.into(),
         borrower_module_id: borrower.module_id.clone(),
         granted_tokens: grant,
+        currently_used_tokens: grant,
+        reclaimable_tokens: grant,
         release_pipeline: borrower
             .reclaim_pipeline
             .iter()
             .map(|s| s.algorithm_id.clone())
             .collect(),
+        state: "active".into(),
     }
 }
 
@@ -909,11 +1002,13 @@ fn compress_module(
     pinned.push(PromptChunk {
         chunk_id: format!("{}:compressed", module.module_id),
         content: Value::String(text),
+        kind: "text".into(),
         fixed: false,
         protection: "elastic".into(),
         priority: 1.0,
         required_terms: required.into_iter().collect(),
         dependency_group: None,
+        metadata: BTreeMap::new(),
     });
     Ok((pinned, pinned_tokens + after))
 }
@@ -1080,7 +1175,13 @@ fn render(value: &Value) -> String {
 }
 
 fn validate_definition(definition: &ArenaDefinition) -> Result<(), ContextLeaseError> {
-    if definition.arena_id.trim().is_empty() || definition.modules.is_empty() {
+    if definition.arena_id.trim().is_empty()
+        || definition.schema_version.trim().is_empty()
+        || definition.policy_version.trim().is_empty()
+        || definition.admission_policy.trim().is_empty()
+        || definition.modules.is_empty()
+        || definition.framework_reserve_tokens < 0
+    {
         return Err(ContextLeaseError::new(
             "layout_validation_error",
             "arena and modules are required",
@@ -1109,6 +1210,27 @@ fn validate_definition(definition: &ArenaDefinition) -> Result<(), ContextLeaseE
                 "weight must be positive",
             ));
         }
+        validate_choice(
+            "lifecycle",
+            &m.lifecycle,
+            &["static", "session", "request", "turn", "ephemeral"],
+        )?;
+        validate_choice(
+            "allocation",
+            &m.allocation,
+            &["fixed", "weighted", "priority", "elastic"],
+        )?;
+        validate_choice("protection", &m.protection, &["pinned", "mixed", "elastic"])?;
+        validate_choice(
+            "reclaim",
+            &m.reclaim,
+            &["none", "builtin_pipeline", "semantic_pipeline", "custom"],
+        )?;
+        validate_choice(
+            "render_target",
+            &m.render_target,
+            &["text", "messages", "tool_schema", "structured"],
+        )?;
         if m.can_borrow && m.max_tokens > m.target_tokens && m.reclaim_pipeline.is_empty() {
             return Err(ContextLeaseError::new(
                 "layout_validation_error",
@@ -1129,8 +1251,45 @@ fn validate_definition(definition: &ArenaDefinition) -> Result<(), ContextLeaseE
                 ),
             ));
         }
+        if m.reclaim_pipeline
+            .iter()
+            .any(|step| step.algorithm_id.trim().is_empty())
+        {
+            return Err(ContextLeaseError::new(
+                "layout_validation_error",
+                format!("{} reclaim algorithm id must not be empty", m.module_id),
+            ));
+        }
     }
     Ok(())
+}
+fn validate_model(model: &ModelProfile) -> Result<(), ContextLeaseError> {
+    if model.model_profile_id.trim().is_empty()
+        || model.context_limit_tokens <= 0
+        || model.reserved_output_tokens < 0
+        || model.tokenizer_id.trim().is_empty()
+        || model.tokenizer_version.trim().is_empty()
+    {
+        return Err(ContextLeaseError::new(
+            "configuration_error",
+            "invalid model profile",
+        ));
+    }
+    validate_choice(
+        "count_mode",
+        &model.count_mode,
+        &["exact", "estimated", "hybrid"],
+    )
+}
+fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> Result<(), ContextLeaseError> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(ContextLeaseError::new(
+            "configuration_error",
+            format!("invalid {field}: {value}"),
+        ))
+    }
 }
 fn validate_model_budget(
     definition: &ArenaDefinition,
@@ -1169,12 +1328,31 @@ fn validate_contributions(
                 "unknown or duplicate contribution",
             ));
         }
-        let mut ids = BTreeSet::new();
-        if value.chunks.iter().any(|c| !ids.insert(c.chunk_id.clone())) {
+        if value
+            .observed_demand_tokens
+            .is_some_and(|tokens| tokens < 0)
+        {
             return Err(ContextLeaseError::new(
                 "configuration_error",
-                "duplicate chunk id",
+                "observed demand must be non-negative",
             ));
+        }
+        let mut ids = BTreeSet::new();
+        for chunk in &value.chunks {
+            if chunk.chunk_id.trim().is_empty()
+                || chunk.kind.trim().is_empty()
+                || !ids.insert(chunk.chunk_id.clone())
+            {
+                return Err(ContextLeaseError::new(
+                    "configuration_error",
+                    "chunk ids must be non-empty and unique",
+                ));
+            }
+            validate_choice(
+                "chunk protection",
+                &chunk.protection,
+                &["pinned", "mixed", "elastic"],
+            )?;
         }
         out.insert(value.module_id.clone(), value);
     }
@@ -1214,6 +1392,30 @@ fn policy_v1() -> String {
 fn tokenizer() -> String {
     "regex-estimator-v1".into()
 }
+fn tokenizer_v1() -> String {
+    "1".into()
+}
+fn estimated_count_mode() -> String {
+    "estimated".into()
+}
+fn request_lifecycle() -> String {
+    "request".into()
+}
+fn weighted_allocation() -> String {
+    "weighted".into()
+}
+fn builtin_reclaim() -> String {
+    "builtin_pipeline".into()
+}
+fn text_render_target() -> String {
+    "text".into()
+}
+fn text_kind() -> String {
+    "text".into()
+}
+fn reject_admission() -> String {
+    "reject".into()
+}
 
 #[cfg(test)]
 mod tests {
@@ -1226,13 +1428,18 @@ mod tests {
             max_tokens: max,
             order,
             weight: 1.0,
+            lifecycle: "request".into(),
+            allocation: "weighted".into(),
             protection: "mixed".into(),
+            reclaim: "builtin_pipeline".into(),
+            render_target: "text".into(),
             can_borrow: true,
             can_lend: true,
             reclaim_pipeline: vec![CompressionStepSpec {
                 algorithm_id: "builtin.text.boundary_truncate.v1".into(),
                 options: BTreeMap::new(),
             }],
+            metadata: BTreeMap::new(),
         }
     }
     #[test]
@@ -1243,6 +1450,8 @@ mod tests {
             schema_version: "1.0".into(),
             policy_version: "1".into(),
             framework_reserve_tokens: 0,
+            admission_policy: "reject".into(),
+            metadata: BTreeMap::new(),
         })
         .unwrap();
         let result = arena
@@ -1252,19 +1461,24 @@ mod tests {
                     context_limit_tokens: 12,
                     reserved_output_tokens: 2,
                     tokenizer_id: "regex-estimator-v1".into(),
+                    tokenizer_version: "1".into(),
+                    count_mode: "estimated".into(),
                 },
                 contributions: vec![ModuleContribution {
                     module_id: "memory".into(),
                     chunks: vec![PromptChunk {
                         chunk_id: "m".into(),
                         content: Value::String("one two three four five six".into()),
+                        kind: "text".into(),
                         fixed: false,
                         protection: "elastic".into(),
                         priority: 1.0,
                         required_terms: vec![],
                         dependency_group: None,
+                        metadata: BTreeMap::new(),
                     }],
                     observed_demand_tokens: None,
+                    metadata: BTreeMap::new(),
                 }],
                 request_id: Some("r1".into()),
             })
@@ -1279,20 +1493,24 @@ mod tests {
             PromptChunk {
                 chunk_id: "fixed".into(),
                 content: Value::String("must remain".into()),
+                kind: "text".into(),
                 fixed: true,
                 protection: "elastic".into(),
                 priority: 1.0,
                 required_terms: vec![],
                 dependency_group: None,
+                metadata: BTreeMap::new(),
             },
             PromptChunk {
                 chunk_id: "elastic".into(),
                 content: Value::String("can shrink".into()),
+                kind: "text".into(),
                 fixed: false,
                 protection: "elastic".into(),
                 priority: 1.0,
                 required_terms: vec![],
                 dependency_group: None,
+                metadata: BTreeMap::new(),
             },
         ];
         let error = compress_module(
@@ -1325,6 +1543,8 @@ mod tests {
             schema_version: "1.0".into(),
             policy_version: "1".into(),
             framework_reserve_tokens: 0,
+            admission_policy: "reject".into(),
+            metadata: BTreeMap::new(),
         })
         .unwrap();
         let request = PrepareRequest {
@@ -1333,19 +1553,24 @@ mod tests {
                 context_limit_tokens: 4,
                 reserved_output_tokens: 0,
                 tokenizer_id: "regex-estimator-v1".into(),
+                tokenizer_version: "1".into(),
+                count_mode: "estimated".into(),
             },
             contributions: vec![ModuleContribution {
                 module_id: "memory".into(),
                 chunks: vec![PromptChunk {
                     chunk_id: "facts".into(),
                     content: Value::String("alpha beta gamma delta epsilon zeta".into()),
+                    kind: "text".into(),
                     fixed: false,
                     protection: "elastic".into(),
                     priority: 1.0,
                     required_terms: vec!["alpha".into()],
                     dependency_group: None,
+                    metadata: BTreeMap::new(),
                 }],
                 observed_demand_tokens: None,
+                metadata: BTreeMap::new(),
             }],
             request_id: Some("semantic-r1".into()),
         };

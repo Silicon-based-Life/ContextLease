@@ -31,6 +31,16 @@ fn set_error(code: &str, message: impl AsRef<str>) {
     LAST_ERROR.with(|slot| *slot.borrow_mut() = CString::new(payload).unwrap());
 }
 
+fn set_json_error(error: serde_json::Error) -> i32 {
+    if matches!(error.classify(), serde_json::error::Category::Data) {
+        set_error("configuration_error", error.to_string());
+        CL_CONFIGURATION_ERROR
+    } else {
+        set_error("invalid_json", error.to_string());
+        CL_INVALID_JSON
+    }
+}
+
 unsafe fn utf8<'a>(value: *const c_char, name: &str) -> Result<&'a str, i32> {
     if value.is_null() {
         set_error("invalid_argument", format!("{name} is null"));
@@ -71,10 +81,7 @@ pub unsafe extern "C" fn cl_arena_create(
         };
         let definition: ArenaDefinition = match serde_json::from_str(text) {
             Ok(v) => v,
-            Err(e) => {
-                set_error("invalid_json", e.to_string());
-                return CL_INVALID_JSON;
-            }
+            Err(e) => return set_json_error(e),
         };
         match ContextLeaseArena::new(definition) {
             Ok(arena) => {
@@ -111,10 +118,7 @@ pub unsafe extern "C" fn cl_arena_prepare(
         };
         let request: PrepareRequest = match serde_json::from_str(text) {
             Ok(v) => v,
-            Err(e) => {
-                set_error("invalid_json", e.to_string());
-                return CL_INVALID_JSON;
-            }
+            Err(e) => return set_json_error(e),
         };
         match (*arena).prepare(request) {
             Ok(result) => match serde_json::to_string(&result) {
@@ -157,10 +161,7 @@ pub unsafe extern "C" fn cl_arena_prepare_begin(
         };
         let request: PrepareRequest = match serde_json::from_str(text) {
             Ok(value) => value,
-            Err(error) => {
-                set_error("invalid_json", error.to_string());
-                return CL_INVALID_JSON;
-            }
+            Err(error) => return set_json_error(error),
         };
         match (*arena).prepare_begin(request) {
             Ok(result) => write_json_result(&result, out),
@@ -199,17 +200,11 @@ pub unsafe extern "C" fn cl_arena_prepare_commit(
         };
         let request: PrepareRequest = match serde_json::from_str(request_text) {
             Ok(value) => value,
-            Err(error) => {
-                set_error("invalid_json", error.to_string());
-                return CL_INVALID_JSON;
-            }
+            Err(error) => return set_json_error(error),
         };
         let results: Vec<SemanticResult> = match serde_json::from_str(results_text) {
             Ok(value) => value,
-            Err(error) => {
-                set_error("invalid_json", error.to_string());
-                return CL_INVALID_JSON;
-            }
+            Err(error) => return set_json_error(error),
         };
         match (*arena).prepare_commit(request, results) {
             Ok(result) => write_json_result(&result, out),
@@ -262,13 +257,38 @@ mod tests {
     use super::*;
     use std::ffi::CString;
     #[test]
-    fn invalid_layout_is_contained() {
+    fn missing_required_fields_are_configuration_errors() {
         let json = CString::new("{}").unwrap();
+        let mut arena = ptr::null_mut();
+        assert_eq!(
+            unsafe { cl_arena_create(json.as_ptr(), &mut arena) },
+            CL_CONFIGURATION_ERROR
+        );
+        assert!(arena.is_null());
+    }
+
+    #[test]
+    fn malformed_json_is_reported_separately() {
+        let json = CString::new("{").unwrap();
         let mut arena = ptr::null_mut();
         assert_eq!(
             unsafe { cl_arena_create(json.as_ptr(), &mut arena) },
             CL_INVALID_JSON
         );
         assert!(arena.is_null());
+    }
+
+    #[test]
+    fn unknown_fields_are_configuration_errors() {
+        let json = CString::new(r#"{"arena_id":"a","modules":[],"unknown":true}"#).unwrap();
+        let mut arena = ptr::null_mut();
+        assert_eq!(
+            unsafe { cl_arena_create(json.as_ptr(), &mut arena) },
+            CL_CONFIGURATION_ERROR
+        );
+        assert!(arena.is_null());
+        let error = unsafe { CStr::from_ptr(cl_last_error()) }.to_str().unwrap();
+        assert!(error.contains("configuration_error"));
+        assert!(error.contains("unknown field"));
     }
 }
