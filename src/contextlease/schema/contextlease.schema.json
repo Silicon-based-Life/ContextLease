@@ -147,7 +147,9 @@
       "required": ["module_id", "chunks"],
       "properties": {
         "module_id": {"type": "string", "minLength": 1},
-        "chunks": {"type": "array", "items": {"$ref": "#/$defs/chunk"}}
+        "chunks": {"type": "array", "items": {"$ref": "#/$defs/chunk"}},
+        "observed_demand_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "metadata": {"type": "object", "default": {}}
       },
       "additionalProperties": false
     },

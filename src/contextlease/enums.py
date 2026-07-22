@@ -4,50 +4,67 @@ from enum import StrEnum
 
 
 class LifecyclePolicy(StrEnum):
-    APPLICATION = "application"
+    STATIC = "static"
     SESSION = "session"
     REQUEST = "request"
     TURN = "turn"
-    LOOP = "loop"
-    EVENT_DRIVEN = "event_driven"
+    EPHEMERAL = "ephemeral"
+
+    # Source-compatible names from the 0.2 alpha API.  Their serialized values
+    # intentionally resolve to the versioned JSON contract above.
+    APPLICATION = "static"
+    LOOP = "turn"
+    EVENT_DRIVEN = "ephemeral"
 
 
 class AllocationStrategy(StrEnum):
     FIXED = "fixed"
     WEIGHTED = "weighted"
-    DEMAND_DRIVEN = "demand_driven"
-    ADAPTIVE = "adaptive"
-    EXTERNAL = "external"
+    PRIORITY = "priority"
+    ELASTIC = "elastic"
+
+    DEMAND_DRIVEN = "elastic"
+    ADAPTIVE = "elastic"
+    EXTERNAL = "fixed"
 
 
 class ProtectionPolicy(StrEnum):
     PINNED = "pinned"
     ELASTIC = "elastic"
     MIXED = "mixed"
-    CUSTOM = "custom"
+
+    CUSTOM = "mixed"
 
 
 class ReclaimPolicy(StrEnum):
     NONE = "none"
     BUILTIN_PIPELINE = "builtin_pipeline"
-    DETERMINISTIC = "deterministic"
-    CACHED_VARIANT = "cached_variant"
-    REFERENCE = "reference"
-    PORTFOLIO = "portfolio"
-    CUSTOM_PLUGIN = "custom_plugin"
+    SEMANTIC_PIPELINE = "semantic_pipeline"
+    CUSTOM = "custom"
+
+    DETERMINISTIC = "builtin_pipeline"
+    CACHED_VARIANT = "builtin_pipeline"
+    REFERENCE = "semantic_pipeline"
+    PORTFOLIO = "semantic_pipeline"
+    CUSTOM_PLUGIN = "custom"
 
 
 class RenderTarget(StrEnum):
     TEXT = "text"
     MESSAGES = "messages"
-    TOOLS = "tools"
-    CUSTOM = "custom"
+    TOOL_SCHEMA = "tool_schema"
+    STRUCTURED = "structured"
+
+    TOOLS = "tool_schema"
+    CUSTOM = "structured"
 
 
 class CountMode(StrEnum):
     ESTIMATED = "estimated"
     EXACT = "exact"
-    CALIBRATED = "calibrated"
+    HYBRID = "hybrid"
+
+    CALIBRATED = "hybrid"
 
 
 class LeaseState(StrEnum):

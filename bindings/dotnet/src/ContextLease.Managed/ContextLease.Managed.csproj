@@ -11,10 +11,14 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Silicon-based-Life/ContextLease</RepositoryUrl>
     <PackageTags>llm;prompt;context-window;token-budget;prompt-compression;ai-agent</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net471'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net471" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

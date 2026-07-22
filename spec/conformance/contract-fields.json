@@ -1,0 +1,63 @@
+{
+  "arena": {
+    "arena_id": "contract-fields",
+    "schema_version": "1.0",
+    "policy_version": "policy-contract",
+    "framework_reserve_tokens": 1,
+    "admission_policy": "reject",
+    "metadata": {"suite": "cross-language"},
+    "modules": [
+      {
+        "module_id": "memory",
+        "floor_tokens": 0,
+        "target_tokens": 12,
+        "max_tokens": 12,
+        "order": 3,
+        "weight": 2.5,
+        "lifecycle": "session",
+        "allocation": "priority",
+        "protection": "mixed",
+        "reclaim": "semantic_pipeline",
+        "render_target": "messages",
+        "can_borrow": false,
+        "can_lend": true,
+        "reclaim_pipeline": [
+          {
+            "algorithm_id": "builtin.text.boundary_truncate.v1",
+            "options": {"marker": "contract"}
+          }
+        ],
+        "metadata": {"owner": "host"}
+      }
+    ]
+  },
+  "model": {
+    "model_profile_id": "contract-model",
+    "context_limit_tokens": 32,
+    "reserved_output_tokens": 4,
+    "tokenizer_id": "regex-estimator-v1",
+    "tokenizer_version": "1",
+    "count_mode": "hybrid"
+  },
+  "providers": {},
+  "contributions": [
+    {
+      "module_id": "memory",
+      "observed_demand_tokens": 2,
+      "metadata": {"producer": "fixture"},
+      "chunks": [
+        {
+          "chunk_id": "fact-1",
+          "content": "blue lighthouse",
+          "kind": "message",
+          "fixed": false,
+          "protection": "elastic",
+          "priority": 2,
+          "required_terms": ["blue"],
+          "dependency_group": "turn-1",
+          "metadata": {"source": "fixture"}
+        }
+      ]
+    }
+  ]
+}

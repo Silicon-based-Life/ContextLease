@@ -10,7 +10,7 @@
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-d7a8ff"></a>
 </p>
 
-**ContextLease** is a provider-neutral, cross-language framework for building prompts under a hard LLM context limit. A canonical Rust core is exposed through a stable C ABI to Rust, C, C++, Python, Go, C#, and Unity. It gives every prompt module a floor, target, and maximum budget; lets modules borrow unused capacity through revocable leases; and reclaims borrowed space through a pre-registered compression pipeline when another module needs it back.
+**ContextLease** is a provider-neutral, cross-language framework for building prompts under a hard LLM context limit. The native SDKs share a canonical Rust core exposed through a stable C ABI to Rust, C, C++, Python, Go, C#, and Unity. A high-level dependency-free Python reference API is also available while its facade is migrated to the native core. ContextLease gives every prompt module a floor, target, and maximum budget; lets modules borrow unused capacity through revocable leases; and reclaims borrowed space through a pre-registered compression pipeline when another module needs it back.
 
 It is designed for agent runtimes, RAG systems, assistants, and any application where system rules, tools, memory, retrieved documents, and conversation history compete for the same context window.
 
@@ -47,7 +47,7 @@ contextlease prepare examples/demo.json
 contextlease demo --open
 ```
 
-## Python API
+## Python reference API
 
 The external application owns the module boundaries and initializes the static/dynamic distribution. ContextLease owns allocation, reclamation, compression, and observation.
 
@@ -121,6 +121,12 @@ if err != nil { panic(err) }
 defer arena.Close()
 preparedJSON, err := arena.Prepare(requestJSON)
 ```
+
+## Versioned configuration contract
+
+`src/contextlease/schema/contextlease.schema.json` is the public JSON contract. Python and Rust now accept the same lifecycle, allocation, protection, reclaim, render-target, and count-mode values, preserve them in the layout hash, and reject unknown fields. The shared fixtures under `spec/conformance` gate this behavior across the native and Python paths.
+
+In 0.2, `weighted` is the implemented allocation behavior and text is the canonical renderer. The other versioned policy selectors are preserved for forward-compatible host configuration but must not be treated as implemented scheduling or provider-rendering behavior yet.
 
 ## Control loop
 
