@@ -1,0 +1,7 @@
+include Cargo.toml Cargo.lock LICENSE NOTICE README.md
+recursive-include rust *.toml *.rs
+recursive-include bindings/c/include *.h
+recursive-include bindings/cpp/include *.hpp
+recursive-include src/contextlease/schema *.json
+recursive-include src/contextlease/debug/static *.html *.css *.js
+recursive-include src/contextlease/examples *.json

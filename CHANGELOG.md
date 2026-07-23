@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-07-22
+
+- Established the Rust kernel as the canonical allocator, reclaim engine, and telemetry owner.
+- Added versioned `ContextPlan` / `PreparedContextPlan` structured runtime contracts.
+- Added ABI v2 host tokenizer callbacks and actual-usage EWMA calibration.
+- Added native snapshot/event pull APIs across C, C++, Go, Python, and .NET.
+- Changed Python builds to platform wheels that bundle the native kernel.
+
 All notable changes are documented here. The project follows Semantic Versioning.
 
 ## [Unreleased]

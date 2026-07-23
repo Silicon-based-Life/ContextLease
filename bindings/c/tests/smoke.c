@@ -14,7 +14,7 @@ int main(void) {
         "\"content\":\"keep contract\",\"fixed\":true}]}]}";
     contextlease_arena_t *arena = NULL;
     char *prepared = NULL;
-    if (cl_abi_version() != 1) return 1;
+    if (cl_abi_version() != 2) return 1;
     if (cl_arena_create(definition, &arena) != CL_OK) return 2;
     if (cl_arena_prepare(arena, request, &prepared) != CL_OK) {
         cl_arena_free(arena);
@@ -26,6 +26,9 @@ int main(void) {
         return 4;
     }
     cl_string_free(prepared);
+    char *snapshot = NULL;
+    if (cl_arena_snapshot_json(arena, &snapshot) != CL_OK || snapshot == NULL) return 5;
+    cl_string_free(snapshot);
     cl_arena_free(arena);
     return 0;
 }

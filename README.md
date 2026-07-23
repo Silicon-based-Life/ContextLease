@@ -4,13 +4,13 @@
 
 <p align="center">
   <a href="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-5de4c7">
+  <img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-5de4c7">
   <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-f5a97f">
   <a href="https://www.python.org/"><img alt="Python 3.11–3.14" src="https://img.shields.io/badge/python-3.11%E2%80%933.14-82aaff"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-d7a8ff"></a>
 </p>
 
-**ContextLease** is a provider-neutral, cross-language framework for building prompts under a hard LLM context limit. The native SDKs share a canonical Rust core exposed through a stable C ABI to Rust, C, C++, Python, Go, C#, and Unity. A high-level dependency-free Python reference API is also available while its facade is migrated to the native core. ContextLease gives every prompt module a floor, target, and maximum budget; lets modules borrow unused capacity through revocable leases; and reclaims borrowed space through a pre-registered compression pipeline when another module needs it back.
+**ContextLease** is a provider-neutral, cross-language framework for building prompts under a hard LLM context limit. Rust is the only behavioral kernel; Rust, C, C++, Python, Go, C#, and Unity all reach the same allocator, lease, reclaim, tokenizer, and telemetry state through ABI v2. ContextLease gives every prompt module a floor, target, and maximum budget; lets modules borrow unused capacity through revocable leases; and reclaims borrowed space through a pre-registered compression pipeline when another module needs it back.
 
 It is designed for agent runtimes, RAG systems, assistants, and any application where system rules, tools, memory, retrieved documents, and conversation history compete for the same context window.
 
@@ -31,7 +31,8 @@ Most prompt builders concatenate content and truncate at the end. That makes con
 
 ## Quick start
 
-ContextLease has no required runtime dependencies.
+Python platform wheels bundle the Rust kernel and have no required Python runtime dependencies.
+Git/source installs compile the kernel and therefore require Rust 1.75 or newer.
 
 ```bash
 pip install git+https://github.com/Silicon-based-Life/ContextLease.git
@@ -41,13 +42,14 @@ contextlease demo --open
 From a source checkout:
 
 ```bash
+cargo build -p contextlease-ffi --release
 python -m pip install -e .
 contextlease validate examples/demo.json
 contextlease prepare examples/demo.json
 contextlease demo --open
 ```
 
-## Python reference API
+## Python API (Rust-backed)
 
 The external application owns the module boundaries and initializes the static/dynamic distribution. ContextLease owns allocation, reclamation, compression, and observation.
 
@@ -86,13 +88,17 @@ prepared = arena.prepare(
 )
 
 send_to_model(prepared.rendered)
+
+# Or preserve provider-specific structure instead of flattening immediately.
+for module in prepared.module_plans:
+    route_to_adapter(module.render_target, module.chunks)
 ```
 
 ## Cross-language native core
 
 All native bindings consume the same JSON arena/request contract and the same fixtures under `spec/conformance`. The ABI is versioned independently and rejects incompatible libraries before creating an arena.
 
-Version 0.2 moves deterministic allocation, leasing, reclaim, and the four text compression passes into the canonical core. Provider-backed semantic summarization uses a host-callback two-phase transaction: `prepare_begin` returns content-bearing provider requests, the host invokes its configured provider, and `prepare_commit` validates request ids, monotonic size, required terms, and the final hard budget before mutating arena state.
+Version 0.3 makes the Rust implementation canonical. Provider-backed semantic summarization uses a host-callback two-phase transaction: `prepare_begin` returns content-bearing provider requests, the host invokes its configured provider, and `prepare_commit` validates request ids, monotonic size, required terms, and the final hard budget before mutating arena state. Every result is a versioned `PreparedContextPlan` with structured modules/chunks plus the compatibility `rendered` string.
 
 | Consumer | Integration form | Location |
 |---|---|---|
@@ -124,9 +130,32 @@ preparedJSON, err := arena.Prepare(requestJSON)
 
 ## Versioned configuration contract
 
-`src/contextlease/schema/contextlease.schema.json` is the public JSON contract. Python and Rust now accept the same lifecycle, allocation, protection, reclaim, render-target, and count-mode values, preserve them in the layout hash, and reject unknown fields. The shared fixtures under `spec/conformance` gate this behavior across the native and Python paths.
+`src/contextlease/schema/contextlease.schema.json` defines configuration and `contextlease.runtime.schema.json` defines `ContextPlan`, `PreparedContextPlan`, and usage observations. Python and Rust accept the same lifecycle, allocation, protection, reclaim, render-target, and count-mode values, preserve them in the layout hash, and reject unknown fields. The shared fixtures under `spec/conformance` gate this behavior across bindings.
 
-In 0.2, `weighted` is the implemented allocation behavior and text is the canonical renderer. The other versioned policy selectors are preserved for forward-compatible host configuration but must not be treated as implemented scheduling or provider-rendering behavior yet.
+In 0.3, `weighted` is the implemented allocation behavior. `render_target` is preserved in the structured plan so the host can apply a provider-specific message/tool adapter; `rendered` remains the canonical convenience text. Other policy selectors are versioned contract values and must not be treated as implemented schedulers yet.
+
+## Exact tokenizers and usage calibration
+
+`exact` and `hybrid` plans can call the real tokenizer owned by the host. Python ships an optional tiktoken adapter; ABI v2 exposes the same synchronous callback to native consumers.
+
+```bash
+pip install "contextlease[tokenizers]"
+```
+
+```python
+from contextlease import ContextLeaseArena, TiktokenTokenCounter
+
+arena = ContextLeaseArena(
+    definition,
+    token_counter=TiktokenTokenCounter(encoding_name="o200k_base"),
+)
+prepared = arena.prepare(model_profile, contributions, request_id="turn-42")
+
+# Feed provider-reported input usage back to calibrate future estimates.
+calibration = arena.record_usage("turn-42", actual_input_tokens=provider_usage)
+```
+
+Calibration uses a conservative EWMA safety multiplier keyed by model profile and tokenizer version. Exact host counts bypass the estimator multiplier.
 
 ## Control loop
 
@@ -207,14 +236,12 @@ Use `builtin.semantic.portfolio.v1` with a `providers` list to evaluate multiple
 
 ## Compression catalog
 
-ContextLease ships 14 algorithms. Pipelines can mix cheap deterministic passes with a semantic summary and a final hard boundary.
+The canonical Rust kernel ships four deterministic text passes and two semantic host-request algorithms. The larger `contextlease.compression` Python catalog remains available as explicit host-side utilities, but it is not a second allocation/reclaim core.
 
 | Family | Algorithms |
 |---|---|
 | Text | whitespace normalization, block deduplication, extractive sentence ranking, boundary truncation |
-| Collections | exact/similarity deduplication, priority selection, recency selection |
-| Structured | JSON minification, field pruning, atomic message-group selection |
-| References | externalize content behind a reference marker |
+| Host utilities (Python) | collection selection/deduplication, structured pruning, reference externalization |
 | Semantic | single-provider summary, multi-provider portfolio |
 
 Compression results are accepted only when they are monotonic, fit the target, and preserve configured `required_terms`. Pinned content is never sent through reclaim.
@@ -267,6 +294,7 @@ ContextLease
 ## Development
 
 ```bash
+python -m pip install -e .
 python -m compileall -q src
 python -m unittest discover -s tests -v
 node --check src/contextlease/debug/static/app.js

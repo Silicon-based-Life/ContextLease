@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -113,12 +116,18 @@ pub struct ModuleContribution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrepareRequest {
+    #[serde(default = "v1")]
+    pub schema_version: String,
     pub model: ModelProfile,
     #[serde(default)]
     pub contributions: Vec<ModuleContribution>,
     #[serde(default)]
     pub request_id: Option<String>,
 }
+
+/// Versioned, language-neutral input IR. `PrepareRequest` remains as the
+/// source-compatible Rust name while every binding exchanges a ContextPlan.
+pub type ContextPlan = PrepareRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticRequest {
@@ -197,13 +206,103 @@ pub struct ModuleUsage {
     pub compression_ratio: f64,
     pub change_rate: f64,
     pub pressure: String,
+    pub last_updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreparedContext {
+pub struct PreparedChunk {
+    pub chunk_id: String,
+    pub kind: String,
+    pub content: Value,
+    pub fixed: bool,
+    pub protection: String,
+    pub priority: f64,
+    pub required_terms: Vec<String>,
+    pub dependency_group: Option<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub token_count: i32,
+    pub compressed: bool,
+    pub source_chunk_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedModulePlan {
+    pub module_id: String,
+    pub render_target: String,
+    pub allocation: ModuleAllocation,
+    pub usage: ModuleUsage,
+    pub chunks: Vec<PreparedChunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageCalibration {
+    pub model_profile_id: String,
+    pub tokenizer_id: String,
+    pub tokenizer_version: String,
+    pub sample_count: u64,
+    pub ewma_ratio: f64,
+    pub safety_multiplier: f64,
+    pub last_estimated_tokens: i32,
+    pub last_actual_tokens: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageObservation {
+    pub request_id: String,
+    pub actual_input_tokens: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceEvent {
+    pub event_id: String,
+    pub seq: u64,
+    pub occurred_at: String,
+    pub arena_id: String,
+    pub instance_id: String,
+    pub request_id: Option<String>,
+    pub event_type: String,
+    pub schema_version: String,
+    pub layout_hash: String,
+    pub policy_version: String,
+    pub payload: BTreeMap<String, Value>,
+    pub priority: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArenaSnapshot {
+    pub schema_version: String,
+    pub arena_id: String,
+    pub instance_id: String,
+    pub snapshot_seq: u64,
+    pub captured_at: String,
+    pub request_id: Option<String>,
+    pub model_profile_id: String,
+    pub tokenizer_id: String,
+    pub tokenizer_version: String,
+    pub token_count_mode: String,
+    pub layout_hash: String,
+    pub policy_version: String,
+    pub context_limit_tokens: i32,
+    pub reserved_output_tokens: i32,
+    pub framework_reserve_tokens: i32,
+    pub input_budget_tokens: i32,
+    pub used_tokens: i32,
+    pub slack_tokens: i32,
+    pub utilization: f64,
+    pub pressure: String,
+    pub modules: Vec<ModuleUsage>,
+    pub leases: Vec<Lease>,
+    pub calibration: Option<UsageCalibration>,
+    pub health: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedContextPlan {
     pub schema_version: String,
     pub core_version: String,
     pub arena_id: String,
+    pub instance_id: String,
     pub request_id: String,
     pub layout_hash: String,
     pub policy_version: String,
@@ -222,7 +321,14 @@ pub struct PreparedContext {
     pub allocations: Vec<ModuleAllocation>,
     pub leases: Vec<Lease>,
     pub modules: Vec<ModuleUsage>,
+    pub module_plans: Vec<PreparedModulePlan>,
+    pub trace_events: Vec<TraceEvent>,
+    pub snapshot: ArenaSnapshot,
+    pub calibration: Option<UsageCalibration>,
 }
+
+/// Compatibility alias retained for 0.2 Rust callers.
+pub type PreparedContext = PreparedContextPlan;
 
 #[derive(Debug, Clone)]
 pub struct ContextLeaseError {
@@ -246,18 +352,128 @@ impl fmt::Display for ContextLeaseError {
 }
 impl std::error::Error for ContextLeaseError {}
 
+#[derive(Debug, Clone)]
+struct RecentUsage {
+    model_profile_id: String,
+    tokenizer_id: String,
+    tokenizer_version: String,
+    estimated_tokens: i32,
+}
+
 #[derive(Default)]
 struct ArenaState {
     request_seq: u64,
+    snapshot_seq: u64,
+    event_seq: u64,
     previous_usage: HashMap<String, i32>,
     active_leases: HashMap<String, Lease>,
+    calibrations: HashMap<String, UsageCalibration>,
+    recent_usage: HashMap<String, RecentUsage>,
+    recent_usage_order: VecDeque<String>,
+    events: VecDeque<TraceEvent>,
+    events_dropped: u64,
+    latest_snapshot: Option<ArenaSnapshot>,
+}
+
+impl ArenaState {
+    fn begin_transaction(&self) -> Self {
+        Self {
+            request_seq: self.request_seq,
+            snapshot_seq: self.snapshot_seq,
+            event_seq: self.event_seq,
+            previous_usage: self.previous_usage.clone(),
+            active_leases: self.active_leases.clone(),
+            calibrations: self.calibrations.clone(),
+            recent_usage: self.recent_usage.clone(),
+            recent_usage_order: self.recent_usage_order.clone(),
+            events: VecDeque::new(),
+            events_dropped: self.events_dropped,
+            latest_snapshot: self.latest_snapshot.clone(),
+        }
+    }
+
+    fn commit_transaction(&mut self, mut transaction: Self) {
+        self.request_seq = transaction.request_seq;
+        self.snapshot_seq = transaction.snapshot_seq;
+        self.event_seq = transaction.event_seq;
+        self.previous_usage = transaction.previous_usage;
+        self.active_leases = transaction.active_leases;
+        self.calibrations = transaction.calibrations;
+        self.recent_usage = transaction.recent_usage;
+        self.recent_usage_order = transaction.recent_usage_order;
+        self.events_dropped = transaction.events_dropped;
+        for event in transaction.events.drain(..) {
+            if self.events.len() == 10_000 {
+                self.events.pop_front();
+                self.events_dropped += 1;
+            }
+            self.events.push_back(event);
+        }
+        self.latest_snapshot = transaction.latest_snapshot;
+        if let Some(snapshot) = self.latest_snapshot.as_mut() {
+            snapshot
+                .health
+                .insert("events_dropped".into(), Value::from(self.events_dropped));
+        }
+    }
 }
 
 pub struct ContextLeaseArena {
     definition: ArenaDefinition,
     layout_hash: String,
+    instance_id: String,
     order: Vec<usize>,
     state: Mutex<ArenaState>,
+}
+
+/// Host tokenizer interface used by Rust callers and the C ABI callback.
+/// Implementations must be deterministic for the duration of one prepare.
+pub trait TokenCounter: Send + Sync {
+    fn count_text(&self, text: &str) -> i32;
+}
+
+struct CountContext<'a> {
+    tokenizer_id: &'a str,
+    external: Option<&'a dyn TokenCounter>,
+    safety_multiplier: f64,
+    failed: Cell<bool>,
+}
+
+impl CountContext<'_> {
+    fn count_text(&self, text: &str) -> i32 {
+        let raw = self
+            .external
+            .map(|counter| counter.count_text(text))
+            .unwrap_or_else(|| estimate_text(text, self.tokenizer_id));
+        if raw < 0 {
+            self.failed.set(true);
+            return 0;
+        }
+        if self.external.is_some() {
+            raw
+        } else {
+            ((raw as f64) * self.safety_multiplier).ceil() as i32
+        }
+    }
+
+    fn count_content(&self, value: &Value) -> i32 {
+        match value {
+            Value::String(text) => self.count_text(text),
+            Value::Null => 0,
+            value => self.count_text(&serde_json::to_string(value).unwrap_or_default()),
+        }
+    }
+
+    fn ensure_valid(&self) -> Result<(), ContextLeaseError> {
+        if self.failed.get() {
+            Err(ContextLeaseError::new(
+                "tokenizer_callback_failed",
+                "host tokenizer callback returned an error",
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl ContextLeaseArena {
@@ -278,6 +494,12 @@ impl ContextLeaseArena {
             (a.order, &a.module_id).cmp(&(b.order, &b.module_id))
         });
         Ok(Self {
+            instance_id: format!(
+                "{}-{}-{}",
+                definition.arena_id,
+                std::process::id(),
+                unix_millis()
+            ),
             definition,
             layout_hash,
             order,
@@ -286,18 +508,46 @@ impl ContextLeaseArena {
     }
 
     pub fn prepare(&self, request: PrepareRequest) -> Result<PreparedContext, ContextLeaseError> {
-        self.prepare_with_semantic_results(request, &[])
+        self.prepare_with_counter_and_semantic_results(request, &[], None)
+    }
+
+    pub fn prepare_with_counter(
+        &self,
+        request: PrepareRequest,
+        counter: &dyn TokenCounter,
+    ) -> Result<PreparedContext, ContextLeaseError> {
+        self.prepare_with_counter_and_semantic_results(request, &[], Some(counter))
     }
 
     pub fn prepare_begin(
         &self,
         request: PrepareRequest,
     ) -> Result<PrepareBeginOutcome, ContextLeaseError> {
-        let semantic_requests = self.plan_semantic_requests(&request)?;
+        self.prepare_begin_with_optional_counter(request, None)
+    }
+
+    pub fn prepare_begin_with_counter(
+        &self,
+        request: PrepareRequest,
+        counter: &dyn TokenCounter,
+    ) -> Result<PrepareBeginOutcome, ContextLeaseError> {
+        self.prepare_begin_with_optional_counter(request, Some(counter))
+    }
+
+    fn prepare_begin_with_optional_counter(
+        &self,
+        request: PrepareRequest,
+        counter: Option<&dyn TokenCounter>,
+    ) -> Result<PrepareBeginOutcome, ContextLeaseError> {
+        let semantic_requests = self.plan_semantic_requests(&request, counter)?;
         if semantic_requests.is_empty() {
             return Ok(PrepareBeginOutcome {
                 status: "ready".into(),
-                prepared: Some(self.prepare(request)?),
+                prepared: Some(self.prepare_with_counter_and_semantic_results(
+                    request,
+                    &[],
+                    counter,
+                )?),
                 semantic_requests: Vec::new(),
             });
         }
@@ -313,7 +563,25 @@ impl ContextLeaseArena {
         request: PrepareRequest,
         results: Vec<SemanticResult>,
     ) -> Result<PreparedContext, ContextLeaseError> {
-        let expected = self.plan_semantic_requests(&request)?;
+        self.prepare_commit_with_optional_counter(request, results, None)
+    }
+
+    pub fn prepare_commit_with_counter(
+        &self,
+        request: PrepareRequest,
+        results: Vec<SemanticResult>,
+        counter: &dyn TokenCounter,
+    ) -> Result<PreparedContext, ContextLeaseError> {
+        self.prepare_commit_with_optional_counter(request, results, Some(counter))
+    }
+
+    fn prepare_commit_with_optional_counter(
+        &self,
+        request: PrepareRequest,
+        results: Vec<SemanticResult>,
+        counter: Option<&dyn TokenCounter>,
+    ) -> Result<PreparedContext, ContextLeaseError> {
+        let expected = self.plan_semantic_requests(&request, counter)?;
         let expected_ids: BTreeSet<&str> = expected
             .iter()
             .map(|item| item.semantic_request_id.as_str())
@@ -333,25 +601,48 @@ impl ContextLeaseArena {
                 ));
             }
         }
-        self.prepare_with_semantic_results(request, &results)
+        self.prepare_with_counter_and_semantic_results(request, &results, counter)
     }
 
-    fn prepare_with_semantic_results(
+    fn prepare_with_counter_and_semantic_results(
         &self,
         request: PrepareRequest,
         results: &[SemanticResult],
+        external_counter: Option<&dyn TokenCounter>,
     ) -> Result<PreparedContext, ContextLeaseError> {
         let semantic_results: HashMap<&str, &str> = results
             .iter()
             .map(|result| (result.semantic_request_id.as_str(), result.content.as_str()))
             .collect();
+        validate_plan(&request)?;
         validate_model(&request.model)?;
+        if request.model.count_mode == "exact" && external_counter.is_none() {
+            return Err(ContextLeaseError::new(
+                "tokenizer_unavailable",
+                "exact count mode requires a host token counter",
+            ));
+        }
+        let calibration_key = calibration_key(&request.model);
+        let safety_multiplier = {
+            let state = self.state.lock().map_err(|_| {
+                ContextLeaseError::new("arena_poisoned", "arena state lock poisoned")
+            })?;
+            state
+                .calibrations
+                .get(&calibration_key)
+                .map(|item| item.safety_multiplier)
+                .unwrap_or(1.0)
+        };
+        let counts = CountContext {
+            tokenizer_id: request.model.tokenizer_id.as_str(),
+            external: external_counter,
+            safety_multiplier,
+            failed: Cell::new(false),
+        };
         let input_budget =
             request.model.context_limit_tokens - request.model.reserved_output_tokens;
-        let tokenizer_id = request.model.tokenizer_id.as_str();
         let contributions = validate_contributions(&self.definition, request.contributions)?;
-        let render_overhead =
-            render_separator_tokens(&self.definition, &contributions, tokenizer_id);
+        let render_overhead = render_separator_tokens(&self.definition, &contributions, &counts);
         let allocation_input_budget = input_budget - render_overhead;
         validate_model_budget(&self.definition, allocation_input_budget)?;
         let demands: HashMap<String, i32> = self
@@ -364,7 +655,7 @@ impl ContextLeaseArena {
                     .map(|c| {
                         c.chunks
                             .iter()
-                            .map(|x| count_content_with_tokenizer(&x.content, tokenizer_id))
+                            .map(|x| counts.count_content(&x.content))
                             .sum()
                     })
                     .unwrap_or(0);
@@ -388,15 +679,85 @@ impl ContextLeaseArena {
             .cloned()
             .map(|a| (a.module_id.clone(), a))
             .collect();
-        let mut state = self
+        let mut committed_state = self
             .state
             .lock()
             .map_err(|_| ContextLeaseError::new("arena_poisoned", "arena state lock poisoned"))?;
+        let mut state = committed_state.begin_transaction();
         state.request_seq += 1;
         let request_id = request
             .request_id
             .filter(|x| !x.trim().is_empty())
             .unwrap_or_else(|| format!("{}:{}", self.definition.arena_id, state.request_seq));
+        let now = timestamp_now();
+        let mut trace_events = Vec::new();
+        trace_events.push(self.push_event_locked(
+            &mut state,
+            Some(request_id.clone()),
+            "request.started",
+            BTreeMap::from([
+                (
+                    "model_profile_id".into(),
+                    Value::String(request.model.model_profile_id.clone()),
+                ),
+                (
+                    "token_count_mode".into(),
+                    Value::String(request.model.count_mode.clone()),
+                ),
+            ]),
+            "state",
+        ));
+        let next_leases: HashMap<String, Lease> = leases
+            .iter()
+            .cloned()
+            .map(|lease| (lease.lease_id.clone(), lease))
+            .collect();
+        let previous_leases: Vec<Lease> = state.active_leases.values().cloned().collect();
+        for previous in previous_leases {
+            let current = next_leases.get(&previous.lease_id);
+            let reclaimed =
+                previous.granted_tokens - current.map(|lease| lease.granted_tokens).unwrap_or(0);
+            if reclaimed > 0 {
+                trace_events.push(self.push_event_locked(
+                    &mut state,
+                    Some(request_id.clone()),
+                    "lease.reclaimed",
+                    BTreeMap::from([
+                        ("lease_id".into(), Value::String(previous.lease_id.clone())),
+                        ("reclaimed_tokens".into(), Value::from(reclaimed)),
+                        (
+                            "borrower_module_id".into(),
+                            Value::String(previous.borrower_module_id.clone()),
+                        ),
+                    ]),
+                    "state",
+                ));
+            }
+        }
+        for lease in &leases {
+            let granted = lease.granted_tokens
+                - state
+                    .active_leases
+                    .get(&lease.lease_id)
+                    .map(|previous| previous.granted_tokens)
+                    .unwrap_or(0);
+            if granted > 0 {
+                trace_events.push(self.push_event_locked(
+                    &mut state,
+                    Some(request_id.clone()),
+                    "lease.granted",
+                    BTreeMap::from([
+                        ("lease_id".into(), Value::String(lease.lease_id.clone())),
+                        ("granted_tokens".into(), Value::from(granted)),
+                        (
+                            "borrower_module_id".into(),
+                            Value::String(lease.borrower_module_id.clone()),
+                        ),
+                    ]),
+                    "state",
+                ));
+            }
+        }
         let mut final_chunks: HashMap<String, Vec<PromptChunk>> = HashMap::new();
         let mut module_usage = Vec::new();
         for index in &self.order {
@@ -408,7 +769,7 @@ impl ContextLeaseArena {
                 .unwrap_or_default();
             let before: i32 = chunks
                 .iter()
-                .map(|c| count_content_with_tokenizer(&c.content, tokenizer_id))
+                .map(|c| counts.count_content(&c.content))
                 .sum();
             let (chunks, after) = if before > allocation.allocated_tokens {
                 compress_module(
@@ -416,20 +777,33 @@ impl ContextLeaseArena {
                     chunks,
                     allocation.allocated_tokens,
                     &semantic_results,
-                    tokenizer_id,
+                    &counts,
                 )?
             } else {
                 (chunks, before)
             };
+            if after < before {
+                trace_events.push(self.push_event_locked(
+                    &mut state,
+                    Some(request_id.clone()),
+                    "chunk.compressed",
+                    BTreeMap::from([
+                        ("module_id".into(), Value::String(module.module_id.clone())),
+                        ("before_tokens".into(), Value::from(before)),
+                        ("after_tokens".into(), Value::from(after)),
+                    ]),
+                    "state",
+                ));
+            }
             let fixed_tokens = chunks
                 .iter()
                 .filter(|c| c.fixed)
-                .map(|c| count_content_with_tokenizer(&c.content, tokenizer_id))
+                .map(|c| counts.count_content(&c.content))
                 .sum();
             let pinned_tokens = chunks
                 .iter()
                 .filter(|c| module.protection == "pinned" || c.protection == "pinned")
-                .map(|c| count_content_with_tokenizer(&c.content, tokenizer_id))
+                .map(|c| counts.count_content(&c.content))
                 .sum();
             let previous = state
                 .previous_usage
@@ -461,14 +835,11 @@ impl ContextLeaseArena {
                 },
                 change_rate: (after - previous) as f64 / previous.max(1) as f64,
                 pressure: pressure(after, allocation.allocated_tokens),
+                last_updated_at: now.clone(),
             });
             final_chunks.insert(module.module_id.clone(), chunks);
         }
-        state.active_leases = leases
-            .iter()
-            .cloned()
-            .map(|l| (l.lease_id.clone(), l))
-            .collect();
+        state.active_leases = next_leases;
         let rendered = self
             .order
             .iter()
@@ -486,7 +857,7 @@ impl ContextLeaseArena {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let prompt_tokens = count_text_with_tokenizer(&rendered, tokenizer_id);
+        let prompt_tokens = counts.count_text(&rendered);
         let usable = input_budget - self.definition.framework_reserve_tokens;
         if prompt_tokens > usable {
             return Err(ContextLeaseError::new(
@@ -494,10 +865,130 @@ impl ContextLeaseArena {
                 "rendered context exceeds usable budget",
             ));
         }
-        Ok(PreparedContext {
+        let module_plans: Vec<PreparedModulePlan> = self
+            .order
+            .iter()
+            .enumerate()
+            .map(|(usage_index, definition_index)| {
+                let module = &self.definition.modules[*definition_index];
+                let chunks = final_chunks
+                    .get(&module.module_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|chunk| {
+                        let compressed =
+                            chunk.chunk_id == format!("{}:compressed", module.module_id);
+                        let source_chunk_ids = chunk
+                            .metadata
+                            .get("source_chunk_ids")
+                            .and_then(Value::as_array)
+                            .map(|values| {
+                                values
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_else(|| vec![chunk.chunk_id.clone()]);
+                        PreparedChunk {
+                            token_count: counts.count_content(&chunk.content),
+                            chunk_id: chunk.chunk_id,
+                            kind: chunk.kind,
+                            content: chunk.content,
+                            fixed: chunk.fixed,
+                            protection: chunk.protection,
+                            priority: chunk.priority,
+                            required_terms: chunk.required_terms,
+                            dependency_group: chunk.dependency_group,
+                            metadata: chunk.metadata,
+                            compressed,
+                            source_chunk_ids,
+                        }
+                    })
+                    .collect();
+                PreparedModulePlan {
+                    module_id: module.module_id.clone(),
+                    render_target: module.render_target.clone(),
+                    allocation: allocation_by_id[&module.module_id].clone(),
+                    usage: module_usage[usage_index].clone(),
+                    chunks,
+                }
+            })
+            .collect();
+        trace_events.push(self.push_event_locked(
+            &mut state,
+            Some(request_id.clone()),
+            "request.prepared",
+            BTreeMap::from([
+                ("prompt_tokens".into(), Value::from(prompt_tokens)),
+                ("input_budget_tokens".into(), Value::from(usable)),
+            ]),
+            "state",
+        ));
+        state.snapshot_seq += 1;
+        let calibration = state.calibrations.get(&calibration_key).cloned();
+        let mut health = BTreeMap::new();
+        health.insert("events_dropped".into(), Value::from(state.events_dropped));
+        health.insert("core_version".into(), Value::String(CORE_VERSION.into()));
+        let snapshot = ArenaSnapshot {
+            schema_version: "1.0".into(),
+            arena_id: self.definition.arena_id.clone(),
+            instance_id: self.instance_id.clone(),
+            snapshot_seq: state.snapshot_seq,
+            captured_at: timestamp_now(),
+            request_id: Some(request_id.clone()),
+            model_profile_id: request.model.model_profile_id.clone(),
+            tokenizer_id: request.model.tokenizer_id.clone(),
+            tokenizer_version: request.model.tokenizer_version.clone(),
+            token_count_mode: request.model.count_mode.clone(),
+            layout_hash: self.layout_hash.clone(),
+            policy_version: self.definition.policy_version.clone(),
+            context_limit_tokens: request.model.context_limit_tokens,
+            reserved_output_tokens: request.model.reserved_output_tokens,
+            framework_reserve_tokens: self.definition.framework_reserve_tokens,
+            input_budget_tokens: usable,
+            used_tokens: prompt_tokens,
+            slack_tokens: usable - prompt_tokens,
+            utilization: prompt_tokens as f64 / usable.max(1) as f64,
+            pressure: pressure(prompt_tokens, usable),
+            modules: module_usage.clone(),
+            leases: leases.clone(),
+            calibration: calibration.clone(),
+            health,
+        };
+        state.latest_snapshot = Some(snapshot.clone());
+        trace_events.push(self.push_event_locked(
+            &mut state,
+            Some(request_id.clone()),
+            "snapshot.published",
+            BTreeMap::from([("snapshot_seq".into(), Value::from(snapshot.snapshot_seq))]),
+            "gauge",
+        ));
+        state.recent_usage.insert(
+            request_id.clone(),
+            RecentUsage {
+                model_profile_id: request.model.model_profile_id.clone(),
+                tokenizer_id: request.model.tokenizer_id.clone(),
+                tokenizer_version: request.model.tokenizer_version.clone(),
+                estimated_tokens: prompt_tokens,
+            },
+        );
+        state
+            .recent_usage_order
+            .retain(|candidate| candidate != &request_id);
+        state.recent_usage_order.push_back(request_id.clone());
+        while state.recent_usage_order.len() > 2_048 {
+            if let Some(expired) = state.recent_usage_order.pop_front() {
+                state.recent_usage.remove(&expired);
+            }
+        }
+        counts.ensure_valid()?;
+        let prepared = PreparedContext {
             schema_version: "1.0".into(),
             core_version: CORE_VERSION.into(),
             arena_id: self.definition.arena_id.clone(),
+            instance_id: self.instance_id.clone(),
             request_id,
             layout_hash: self.layout_hash.clone(),
             policy_version: self.definition.policy_version.clone(),
@@ -516,21 +1007,196 @@ impl ContextLeaseArena {
             allocations,
             leases,
             modules: module_usage,
-        })
+            module_plans,
+            trace_events,
+            snapshot,
+            calibration,
+        };
+        committed_state.commit_transaction(state);
+        Ok(prepared)
+    }
+
+    pub fn snapshot(&self) -> Result<Option<ArenaSnapshot>, ContextLeaseError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ContextLeaseError::new("arena_poisoned", "arena state lock poisoned"))?;
+        Ok(state.latest_snapshot.clone())
+    }
+
+    pub fn events_after(
+        &self,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<TraceEvent>, ContextLeaseError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ContextLeaseError::new("arena_poisoned", "arena state lock poisoned"))?;
+        Ok(state
+            .events
+            .iter()
+            .filter(|event| event.seq > after_seq)
+            .take(limit.clamp(1, 10_000))
+            .cloned()
+            .collect())
+    }
+
+    pub fn record_usage(
+        &self,
+        observation: UsageObservation,
+    ) -> Result<UsageCalibration, ContextLeaseError> {
+        if observation.request_id.trim().is_empty() || observation.actual_input_tokens < 0 {
+            return Err(ContextLeaseError::new(
+                "configuration_error",
+                "usage observation requires request_id and non-negative actual_input_tokens",
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ContextLeaseError::new("arena_poisoned", "arena state lock poisoned"))?;
+        let recent = state
+            .recent_usage
+            .remove(&observation.request_id)
+            .ok_or_else(|| {
+                ContextLeaseError::new(
+                    "usage_observation_unknown",
+                    format!("unknown request_id {}", observation.request_id),
+                )
+            })?;
+        state
+            .recent_usage_order
+            .retain(|candidate| candidate != &observation.request_id);
+        let key = calibration_key_parts(
+            &recent.model_profile_id,
+            &recent.tokenizer_id,
+            &recent.tokenizer_version,
+        );
+        let ratio = if recent.estimated_tokens <= 0 {
+            1.0
+        } else {
+            observation.actual_input_tokens as f64 / recent.estimated_tokens as f64
+        };
+        let entry = state.calibrations.entry(key).or_insert(UsageCalibration {
+            model_profile_id: recent.model_profile_id,
+            tokenizer_id: recent.tokenizer_id,
+            tokenizer_version: recent.tokenizer_version,
+            sample_count: 0,
+            ewma_ratio: 1.0,
+            safety_multiplier: 1.0,
+            last_estimated_tokens: 0,
+            last_actual_tokens: 0,
+        });
+        entry.sample_count += 1;
+        entry.ewma_ratio = if entry.sample_count == 1 {
+            ratio
+        } else {
+            0.2 * ratio + 0.8 * entry.ewma_ratio
+        };
+        entry.safety_multiplier = entry.ewma_ratio.max(1.0);
+        entry.last_estimated_tokens = recent.estimated_tokens;
+        entry.last_actual_tokens = observation.actual_input_tokens;
+        let calibration = entry.clone();
+        let event = self.push_event_locked(
+            &mut state,
+            Some(observation.request_id),
+            "usage.calibrated",
+            BTreeMap::from([
+                ("sample_count".into(), Value::from(calibration.sample_count)),
+                (
+                    "estimated_input_tokens".into(),
+                    Value::from(calibration.last_estimated_tokens),
+                ),
+                (
+                    "actual_input_tokens".into(),
+                    Value::from(calibration.last_actual_tokens),
+                ),
+                (
+                    "safety_multiplier".into(),
+                    Value::from(calibration.safety_multiplier),
+                ),
+            ]),
+            "state",
+        );
+        let events_dropped = state.events_dropped;
+        if let Some(snapshot) = state.latest_snapshot.as_mut() {
+            snapshot.calibration = Some(calibration.clone());
+            snapshot
+                .health
+                .insert("last_calibration_event_seq".into(), Value::from(event.seq));
+            snapshot
+                .health
+                .insert("events_dropped".into(), Value::from(events_dropped));
+        }
+        Ok(calibration)
+    }
+
+    fn push_event_locked(
+        &self,
+        state: &mut ArenaState,
+        request_id: Option<String>,
+        event_type: &str,
+        payload: BTreeMap<String, Value>,
+        priority: &str,
+    ) -> TraceEvent {
+        state.event_seq += 1;
+        let event = TraceEvent {
+            event_id: format!("{}:{}", self.instance_id, state.event_seq),
+            seq: state.event_seq,
+            occurred_at: timestamp_now(),
+            arena_id: self.definition.arena_id.clone(),
+            instance_id: self.instance_id.clone(),
+            request_id,
+            event_type: event_type.into(),
+            schema_version: "1.0".into(),
+            layout_hash: self.layout_hash.clone(),
+            policy_version: self.definition.policy_version.clone(),
+            payload,
+            priority: priority.into(),
+        };
+        if state.events.len() == 10_000 {
+            state.events.pop_front();
+            state.events_dropped += 1;
+        }
+        state.events.push_back(event.clone());
+        event
     }
 
     fn plan_semantic_requests(
         &self,
         request: &PrepareRequest,
+        external_counter: Option<&dyn TokenCounter>,
     ) -> Result<Vec<SemanticRequest>, ContextLeaseError> {
+        validate_plan(request)?;
         validate_model(&request.model)?;
+        if request.model.count_mode == "exact" && external_counter.is_none() {
+            return Err(ContextLeaseError::new(
+                "tokenizer_unavailable",
+                "exact count mode requires a host token counter",
+            ));
+        }
+        let calibration = {
+            let state = self.state.lock().map_err(|_| {
+                ContextLeaseError::new("arena_poisoned", "arena state lock poisoned")
+            })?;
+            state
+                .calibrations
+                .get(&calibration_key(&request.model))
+                .map(|value| value.safety_multiplier)
+                .unwrap_or(1.0)
+        };
+        let counts = CountContext {
+            tokenizer_id: request.model.tokenizer_id.as_str(),
+            external: external_counter,
+            safety_multiplier: calibration,
+            failed: Cell::new(false),
+        };
         let input_budget =
             request.model.context_limit_tokens - request.model.reserved_output_tokens;
-        let tokenizer_id = request.model.tokenizer_id.as_str();
         let contributions =
             validate_contributions(&self.definition, request.contributions.clone())?;
-        let render_overhead =
-            render_separator_tokens(&self.definition, &contributions, tokenizer_id);
+        let render_overhead = render_separator_tokens(&self.definition, &contributions, &counts);
         let allocation_input_budget = input_budget - render_overhead;
         validate_model_budget(&self.definition, allocation_input_budget)?;
         let demands: HashMap<String, i32> = self
@@ -543,7 +1209,7 @@ impl ContextLeaseArena {
                     .map(|item| {
                         item.chunks
                             .iter()
-                            .map(|chunk| count_content_with_tokenizer(&chunk.content, tokenizer_id))
+                            .map(|chunk| counts.count_content(&chunk.content))
                             .sum()
                     })
                     .unwrap_or(0);
@@ -575,18 +1241,16 @@ impl ContextLeaseArena {
                 .unwrap_or_default();
             let before: i32 = chunks
                 .iter()
-                .map(|chunk| count_content_with_tokenizer(&chunk.content, tokenizer_id))
+                .map(|chunk| counts.count_content(&chunk.content))
                 .sum();
             let allocation = allocation_by_id[module.module_id.as_str()];
             if before > allocation {
                 requests.extend(collect_semantic_requests(
-                    module,
-                    chunks,
-                    allocation,
-                    tokenizer_id,
+                    module, chunks, allocation, &counts,
                 )?);
             }
         }
+        counts.ensure_valid()?;
         Ok(requests)
     }
 }
@@ -594,7 +1258,7 @@ impl ContextLeaseArena {
 fn render_separator_tokens(
     definition: &ArenaDefinition,
     contributions: &HashMap<String, ModuleContribution>,
-    tokenizer_id: &str,
+    counts: &CountContext<'_>,
 ) -> i32 {
     let rendered_module_count = definition
         .modules
@@ -614,7 +1278,7 @@ fn render_separator_tokens(
     if rendered_module_count <= 1 {
         return 0;
     }
-    count_text_with_tokenizer(&"\n\n".repeat(rendered_module_count - 1), tokenizer_id)
+    counts.count_text(&"\n\n".repeat(rendered_module_count - 1))
 }
 
 fn allocate(
@@ -798,14 +1462,14 @@ fn collect_semantic_requests(
     module: &ModuleDefinition,
     chunks: Vec<PromptChunk>,
     allocation: i32,
-    tokenizer_id: &str,
+    counts: &CountContext<'_>,
 ) -> Result<Vec<SemanticRequest>, ContextLeaseError> {
     let (protected, elastic): (Vec<_>, Vec<_>) = chunks.into_iter().partition(|chunk| {
         chunk.fixed || module.protection == "pinned" || chunk.protection == "pinned"
     });
     let protected_tokens: i32 = protected
         .iter()
-        .map(|chunk| count_content_with_tokenizer(&chunk.content, tokenizer_id))
+        .map(|chunk| counts.count_content(&chunk.content))
         .sum();
     if protected_tokens > allocation {
         return Err(ContextLeaseError::new(
@@ -827,15 +1491,14 @@ fn collect_semantic_requests(
         .collect::<Vec<_>>()
         .join("\n\n");
     for step in &module.reclaim_pipeline {
-        if count_text_with_tokenizer(&text, tokenizer_id) <= target {
+        if counts.count_text(&text) <= target {
             break;
         }
         if is_semantic_algorithm(&step.algorithm_id) {
             return semantic_requests_for_step(module, step, &text, target, &required);
         }
-        let candidate = compress_text(&step.algorithm_id, &text, target, tokenizer_id);
-        if count_text_with_tokenizer(&candidate, tokenizer_id)
-            <= count_text_with_tokenizer(&text, tokenizer_id)
+        let candidate = compress_text(&step.algorithm_id, &text, target, counts);
+        if counts.count_text(&candidate) <= counts.count_text(&text)
             && required.iter().all(|term| candidate.contains(term))
         {
             text = candidate;
@@ -920,14 +1583,14 @@ fn compress_module(
     chunks: Vec<PromptChunk>,
     allocation: i32,
     semantic_results: &HashMap<&str, &str>,
-    tokenizer_id: &str,
+    counts: &CountContext<'_>,
 ) -> Result<(Vec<PromptChunk>, i32), ContextLeaseError> {
     let (mut pinned, elastic): (Vec<_>, Vec<_>) = chunks
         .into_iter()
         .partition(|c| c.fixed || module.protection == "pinned" || c.protection == "pinned");
     let pinned_tokens: i32 = pinned
         .iter()
-        .map(|c| count_content_with_tokenizer(&c.content, tokenizer_id))
+        .map(|c| counts.count_content(&c.content))
         .sum();
     if pinned_tokens > allocation {
         return Err(ContextLeaseError::new(
@@ -952,7 +1615,7 @@ fn compress_module(
         .collect::<Vec<_>>()
         .join("\n\n");
     for step in &module.reclaim_pipeline {
-        if count_text_with_tokenizer(&text, tokenizer_id) <= target {
+        if counts.count_text(&text) <= target {
             break;
         }
         if is_semantic_algorithm(&step.algorithm_id) {
@@ -966,12 +1629,11 @@ fn compress_module(
                 })
                 .filter(|candidate| {
                     !candidate.trim().is_empty()
-                        && count_text_with_tokenizer(candidate, tokenizer_id)
-                            <= count_text_with_tokenizer(&text, tokenizer_id)
+                        && counts.count_text(candidate) <= counts.count_text(&text)
                         && required.iter().all(|term| candidate.contains(term))
                 })
                 .collect();
-            candidates.sort_by_key(|candidate| count_text_with_tokenizer(candidate, tokenizer_id));
+            candidates.sort_by_key(|candidate| counts.count_text(candidate));
             let candidate = candidates.first().copied().ok_or_else(|| {
                 ContextLeaseError::new(
                     "semantic_result_missing_or_invalid",
@@ -983,22 +1645,37 @@ fn compress_module(
             })?;
             text = candidate.to_string();
         } else {
-            let candidate = compress_text(&step.algorithm_id, &text, target, tokenizer_id);
-            if count_text_with_tokenizer(&candidate, tokenizer_id)
-                <= count_text_with_tokenizer(&text, tokenizer_id)
+            let candidate = compress_text(&step.algorithm_id, &text, target, counts);
+            if counts.count_text(&candidate) <= counts.count_text(&text)
                 && required.iter().all(|term| candidate.contains(term))
             {
                 text = candidate;
             }
         }
     }
-    let after = count_text_with_tokenizer(&text, tokenizer_id);
+    let after = counts.count_text(&text);
     if after > target {
         return Err(ContextLeaseError::new(
             "admission_error",
             format!("{} reclaim target unmet", module.module_id),
         ));
     }
+    let source_chunk_ids: Vec<Value> = elastic
+        .iter()
+        .map(|chunk| Value::String(chunk.chunk_id.clone()))
+        .collect();
+    let mut metadata = BTreeMap::new();
+    metadata.insert("source_chunk_ids".into(), Value::Array(source_chunk_ids));
+    metadata.insert(
+        "compression_pipeline".into(),
+        Value::Array(
+            module
+                .reclaim_pipeline
+                .iter()
+                .map(|step| Value::String(step.algorithm_id.clone()))
+                .collect(),
+        ),
+    );
     pinned.push(PromptChunk {
         chunk_id: format!("{}:compressed", module.module_id),
         content: Value::String(text),
@@ -1008,12 +1685,12 @@ fn compress_module(
         priority: 1.0,
         required_terms: required.into_iter().collect(),
         dependency_group: None,
-        metadata: BTreeMap::new(),
+        metadata,
     });
     Ok((pinned, pinned_tokens + after))
 }
 
-fn compress_text(id: &str, text: &str, target: i32, tokenizer_id: &str) -> String {
+fn compress_text(id: &str, text: &str, target: i32, counts: &CountContext<'_>) -> String {
     match id {
         "builtin.text.normalize_whitespace.v1" => {
             text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -1025,13 +1702,13 @@ fn compress_text(id: &str, text: &str, target: i32, tokenizer_id: &str) -> Strin
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
-        "builtin.text.extractive_sentence_rank.v1" => select_sentences(text, target, tokenizer_id),
-        "builtin.text.boundary_truncate.v1" => truncate(text, target, tokenizer_id),
+        "builtin.text.extractive_sentence_rank.v1" => select_sentences(text, target, counts),
+        "builtin.text.boundary_truncate.v1" => truncate(text, target, counts),
         _ => text.to_string(),
     }
 }
 
-fn select_sentences(text: &str, target: i32, tokenizer_id: &str) -> String {
+fn select_sentences(text: &str, target: i32, counts: &CountContext<'_>) -> String {
     let mut result = String::new();
     for sentence in text.split_inclusive(['.', '!', '?', '。', '！', '？']) {
         let next = if result.is_empty() {
@@ -1039,46 +1716,32 @@ fn select_sentences(text: &str, target: i32, tokenizer_id: &str) -> String {
         } else {
             format!("{} {}", result, sentence.trim())
         };
-        if count_text_with_tokenizer(&next, tokenizer_id) > target {
+        if counts.count_text(&next) > target {
             break;
         }
         result = next;
     }
     if result.is_empty() {
-        truncate(text, target, tokenizer_id)
+        truncate(text, target, counts)
     } else {
         result
     }
 }
 
-fn truncate(text: &str, target: i32, tokenizer_id: &str) -> String {
-    if uses_char_estimator(tokenizer_id) {
+fn truncate(text: &str, target: i32, counts: &CountContext<'_>) -> String {
+    if counts.external.is_none() && uses_char_estimator(counts.tokenizer_id) {
         return truncate_char_estimator(text, target);
     }
     if target <= 0 {
         return String::new();
     }
     let mut out = String::new();
-    let mut tokens = 0;
-    let mut in_word = false;
     for ch in text.chars() {
-        let word = ch.is_alphanumeric() || ch == '_';
-        let adds = if word {
-            if in_word {
-                0
-            } else {
-                1
-            }
-        } else if ch.is_whitespace() {
-            0
-        } else {
-            1
-        };
-        if tokens + adds > target {
+        let mut candidate = out.clone();
+        candidate.push(ch);
+        if counts.count_text(&candidate) > target {
             break;
         }
-        tokens += adds;
-        in_word = word;
         out.push(ch);
     }
     out.trim_end().to_string()
@@ -1135,7 +1798,7 @@ fn truncate_char_estimator(text: &str, target: i32) -> String {
     out.trim_end().to_string()
 }
 
-fn count_text_with_tokenizer(text: &str, tokenizer_id: &str) -> i32 {
+fn estimate_text(text: &str, tokenizer_id: &str) -> i32 {
     if uses_char_estimator(tokenizer_id) {
         count_char_estimator(text)
     } else {
@@ -1157,21 +1820,36 @@ pub fn count_text(text: &str) -> i32 {
     }
     tokens
 }
-fn count_content_with_tokenizer(value: &Value, tokenizer_id: &str) -> i32 {
-    match value {
-        Value::String(s) => count_text_with_tokenizer(s, tokenizer_id),
-        Value::Null => 0,
-        value => count_text_with_tokenizer(
-            &serde_json::to_string(value).unwrap_or_default(),
-            tokenizer_id,
-        ),
-    }
-}
 fn render(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
         v => serde_json::to_string(v).unwrap_or_default(),
     }
+}
+
+fn unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn timestamp_now() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| format!("{}Z", unix_millis()))
+}
+
+fn calibration_key(model: &ModelProfile) -> String {
+    calibration_key_parts(
+        &model.model_profile_id,
+        &model.tokenizer_id,
+        &model.tokenizer_version,
+    )
+}
+
+fn calibration_key_parts(model: &str, tokenizer: &str, version: &str) -> String {
+    format!("{model}\0{tokenizer}\0{version}")
 }
 
 fn validate_definition(definition: &ArenaDefinition) -> Result<(), ContextLeaseError> {
@@ -1281,6 +1959,18 @@ fn validate_model(model: &ModelProfile) -> Result<(), ContextLeaseError> {
         &["exact", "estimated", "hybrid"],
     )
 }
+fn validate_plan(plan: &PrepareRequest) -> Result<(), ContextLeaseError> {
+    if plan.schema_version != "1.0" {
+        return Err(ContextLeaseError::new(
+            "configuration_error",
+            format!(
+                "unsupported context plan schema_version: {}",
+                plan.schema_version
+            ),
+        ));
+    }
+    Ok(())
+}
 fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> Result<(), ContextLeaseError> {
     if allowed.contains(&value) {
         Ok(())
@@ -1322,10 +2012,16 @@ fn validate_contributions(
         .collect();
     let mut out = HashMap::new();
     for value in values {
-        if !known.contains(value.module_id.as_str()) || out.contains_key(&value.module_id) {
+        if !known.contains(value.module_id.as_str()) {
             return Err(ContextLeaseError::new(
                 "configuration_error",
-                "unknown or duplicate contribution",
+                format!("unknown contribution module: {}", value.module_id),
+            ));
+        }
+        if out.contains_key(&value.module_id) {
+            return Err(ContextLeaseError::new(
+                "configuration_error",
+                format!("duplicate contribution module: {}", value.module_id),
             ));
         }
         if value
@@ -1339,13 +2035,19 @@ fn validate_contributions(
         }
         let mut ids = BTreeSet::new();
         for chunk in &value.chunks {
-            if chunk.chunk_id.trim().is_empty()
-                || chunk.kind.trim().is_empty()
-                || !ids.insert(chunk.chunk_id.clone())
-            {
+            if chunk.chunk_id.trim().is_empty() || chunk.kind.trim().is_empty() {
                 return Err(ContextLeaseError::new(
                     "configuration_error",
-                    "chunk ids must be non-empty and unique",
+                    "chunk id and kind must be non-empty",
+                ));
+            }
+            if !ids.insert(chunk.chunk_id.clone()) {
+                return Err(ContextLeaseError::new(
+                    "configuration_error",
+                    format!(
+                        "module {} contains duplicate chunk_id {}",
+                        value.module_id, chunk.chunk_id
+                    ),
                 ));
             }
             validate_choice(
@@ -1456,6 +2158,7 @@ mod tests {
         .unwrap();
         let result = arena
             .prepare(PrepareRequest {
+                schema_version: "1.0".into(),
                 model: ModelProfile {
                     model_profile_id: "tiny".into(),
                     context_limit_tokens: 12,
@@ -1513,12 +2216,18 @@ mod tests {
                 metadata: BTreeMap::new(),
             },
         ];
+        let counts = CountContext {
+            tokenizer_id: "regex-estimator-v1",
+            external: None,
+            safety_multiplier: 1.0,
+            failed: Cell::new(false),
+        };
         let error = compress_module(
             &module("memory", 0, 1, 4, 0),
             chunks,
             1,
             &HashMap::new(),
-            "regex-estimator-v1",
+            &counts,
         )
         .unwrap_err();
         assert_eq!(error.code, "admission_error");
@@ -1548,6 +2257,7 @@ mod tests {
         })
         .unwrap();
         let request = PrepareRequest {
+            schema_version: "1.0".into(),
             model: ModelProfile {
                 model_profile_id: "tiny".into(),
                 context_limit_tokens: 4,
@@ -1594,9 +2304,76 @@ mod tests {
     #[test]
     fn cjk_char_estimator_matches_host_contract() {
         let tokenizer_id = "cjk_aware_char_estimator";
-        assert_eq!(count_text_with_tokenizer("中文abcd", tokenizer_id), 3);
-        let truncated = truncate("中文abcdefgh", 3, tokenizer_id);
-        assert!(count_text_with_tokenizer(&truncated, tokenizer_id) <= 3);
+        let counts = CountContext {
+            tokenizer_id,
+            external: None,
+            safety_multiplier: 1.0,
+            failed: Cell::new(false),
+        };
+        assert_eq!(counts.count_text("中文abcd"), 3);
+        let truncated = truncate("中文abcdefgh", 3, &counts);
+        assert!(counts.count_text(&truncated) <= 3);
         assert_eq!(truncated, "中文abcd");
+    }
+
+    #[test]
+    fn structured_plan_native_telemetry_and_usage_calibration_are_owned_by_core() {
+        let arena = ContextLeaseArena::new(ArenaDefinition {
+            arena_id: "trustworthy".into(),
+            modules: vec![module("memory", 0, 8, 8, 0)],
+            schema_version: "1.0".into(),
+            policy_version: "1".into(),
+            framework_reserve_tokens: 0,
+            admission_policy: "reject".into(),
+            metadata: BTreeMap::new(),
+        })
+        .unwrap();
+        let make_request = |request_id: &str| PrepareRequest {
+            schema_version: "1.0".into(),
+            model: ModelProfile {
+                model_profile_id: "calibrated".into(),
+                context_limit_tokens: 8,
+                reserved_output_tokens: 0,
+                tokenizer_id: "regex-estimator-v1".into(),
+                tokenizer_version: "1".into(),
+                count_mode: "estimated".into(),
+            },
+            contributions: vec![ModuleContribution {
+                module_id: "memory".into(),
+                chunks: vec![PromptChunk {
+                    chunk_id: "facts".into(),
+                    content: Value::String("one two".into()),
+                    kind: "text".into(),
+                    fixed: false,
+                    protection: "elastic".into(),
+                    priority: 1.0,
+                    required_terms: vec![],
+                    dependency_group: None,
+                    metadata: BTreeMap::new(),
+                }],
+                observed_demand_tokens: None,
+                metadata: BTreeMap::new(),
+            }],
+            request_id: Some(request_id.into()),
+        };
+        let first = arena.prepare(make_request("usage-1")).unwrap();
+        assert_eq!(first.prompt_tokens, 2);
+        assert_eq!(first.module_plans[0].chunks[0].chunk_id, "facts");
+        assert!(!first.trace_events.is_empty());
+        assert_eq!(
+            arena.snapshot().unwrap().unwrap().request_id.as_deref(),
+            Some("usage-1")
+        );
+        assert!(!arena.events_after(0, 100).unwrap().is_empty());
+        let calibration = arena
+            .record_usage(UsageObservation {
+                request_id: "usage-1".into(),
+                actual_input_tokens: 4,
+            })
+            .unwrap();
+        assert_eq!(calibration.safety_multiplier, 2.0);
+        let second = arena.prepare(make_request("usage-2")).unwrap();
+        assert_eq!(second.prompt_tokens, 4);
+        assert_eq!(second.calibration.unwrap().sample_count, 1);
     }
 }

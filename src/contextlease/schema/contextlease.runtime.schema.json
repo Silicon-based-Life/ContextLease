@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silicon-based-life.github.io/ContextLease/schema/contextlease.runtime.schema.json",
+  "title": "ContextLease Runtime Contract",
+  "oneOf": [
+    { "$ref": "#/$defs/context_plan" },
+    { "$ref": "#/$defs/prepared_context_plan" },
+    { "$ref": "#/$defs/usage_observation" }
+  ],
+  "$defs": {
+    "model_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_profile_id", "context_limit_tokens", "reserved_output_tokens"],
+      "properties": {
+        "model_profile_id": { "type": "string", "minLength": 1 },
+        "context_limit_tokens": { "type": "integer", "minimum": 1 },
+        "reserved_output_tokens": { "type": "integer", "minimum": 0 },
+        "tokenizer_id": { "type": "string", "minLength": 1, "default": "regex-estimator-v1" },
+        "tokenizer_version": { "type": "string", "minLength": 1, "default": "1" },
+        "count_mode": { "enum": ["exact", "estimated", "hybrid"], "default": "estimated" }
+      }
+    },
+    "prompt_chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chunk_id", "content"],
+      "properties": {
+        "chunk_id": { "type": "string", "minLength": 1 },
+        "content": {},
+        "kind": { "type": "string", "minLength": 1, "default": "text" },
+        "fixed": { "type": "boolean", "default": false },
+        "protection": { "enum": ["pinned", "mixed", "elastic"], "default": "elastic" },
+        "priority": { "type": "number", "default": 1 },
+        "required_terms": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "dependency_group": { "type": ["string", "null"] },
+        "metadata": { "type": "object", "default": {} }
+      }
+    },
+    "module_contribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module_id", "chunks"],
+      "properties": {
+        "module_id": { "type": "string", "minLength": 1 },
+        "chunks": { "type": "array", "items": { "$ref": "#/$defs/prompt_chunk" } },
+        "observed_demand_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "metadata": { "type": "object", "default": {} }
+      }
+    },
+    "context_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "contributions"],
+      "properties": {
+        "schema_version": { "const": "1.0", "default": "1.0" },
+        "request_id": { "type": ["string", "null"] },
+        "model": { "$ref": "#/$defs/model_profile" },
+        "contributions": { "type": "array", "items": { "$ref": "#/$defs/module_contribution" } }
+      }
+    },
+    "prepared_context_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "core_version", "arena_id", "instance_id", "request_id", "layout_hash", "policy_version",
+        "model_profile_id", "tokenizer_id", "tokenizer_version", "token_count_mode",
+        "context_limit_tokens", "reserved_output_tokens", "framework_reserve_tokens",
+        "rendered", "prompt_tokens", "input_budget_tokens", "slack_tokens", "pressure",
+        "allocations", "leases", "modules", "module_plans", "trace_events", "snapshot"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "core_version": { "type": "string" },
+        "arena_id": { "type": "string" },
+        "instance_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "layout_hash": { "type": "string" },
+        "policy_version": { "type": "string" },
+        "model_profile_id": { "type": "string" },
+        "tokenizer_id": { "type": "string" },
+        "tokenizer_version": { "type": "string" },
+        "token_count_mode": { "enum": ["exact", "estimated", "hybrid"] },
+        "context_limit_tokens": { "type": "integer", "minimum": 1 },
+        "reserved_output_tokens": { "type": "integer", "minimum": 0 },
+        "framework_reserve_tokens": { "type": "integer", "minimum": 0 },
+        "rendered": { "type": "string" },
+        "prompt_tokens": { "type": "integer", "minimum": 0 },
+        "input_budget_tokens": { "type": "integer", "minimum": 0 },
+        "slack_tokens": { "type": "integer" },
+        "pressure": { "enum": ["normal", "elevated", "critical", "overflow"] },
+        "allocations": { "type": "array" },
+        "leases": { "type": "array" },
+        "modules": { "type": "array" },
+        "module_plans": { "type": "array" },
+        "trace_events": { "type": "array" },
+        "snapshot": { "type": "object" },
+        "calibration": { "type": ["object", "null"] }
+      }
+    },
+    "usage_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "actual_input_tokens"],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "actual_input_tokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

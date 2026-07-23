@@ -8,6 +8,7 @@ from contextlease.errors import AdmissionError
 from contextlease.models import ArenaDefinition, CompressionStepSpec, ModelProfile, ModuleContribution, ModuleDefinition, PromptChunk
 from contextlease.runtime import ContextLeaseArena
 from contextlease.tokenization import CharacterTokenCounter
+from contextlease.providers import CallableSummaryProvider, SummaryProviderRegistry
 
 
 TRUNCATE = (CompressionStepSpec("builtin.text.boundary_truncate.v1"),)
@@ -31,6 +32,69 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.request_id, "r1")
         self.assertNotIn("SECRET-CONTENT", str(public))
         self.assertLessEqual(result.prompt_tokens, result.input_budget_tokens)
+        self.assertEqual(result.module_plans[1].module_id, "borrower")
+        self.assertTrue(result.module_plans[1].chunks)
+
+    def test_actual_usage_calibrates_estimated_future_requests(self):
+        definition = ArenaDefinition(
+            "calibration-test",
+            (ModuleDefinition("memory", 0, 20, 20, can_borrow=False),),
+        )
+        arena = ContextLeaseArena(definition)
+        model = ModelProfile("estimated", 20, 0)
+        contribution = [ModuleContribution("memory", (PromptChunk("facts", "one two"),))]
+        first = arena.prepare(model, contribution, request_id="usage-1")
+        calibration = arena.record_usage("usage-1", first.prompt_tokens * 2)
+        second = arena.prepare(model, contribution, request_id="usage-2")
+        self.assertEqual(calibration.sample_count, 1)
+        self.assertGreaterEqual(second.prompt_tokens, first.prompt_tokens)
+        self.assertTrue(
+            any(
+                event.event_type == "usage.calibrated"
+                for event in arena.observations.events_after("calibration-test", 0)
+            )
+        )
+
+    def test_python_facade_executes_native_two_phase_semantic_request(self):
+        definition = ArenaDefinition(
+            "semantic-facade",
+            (
+                ModuleDefinition(
+                    "memory",
+                    0,
+                    1,
+                    8,
+                    reclaim_pipeline=(
+                        CompressionStepSpec(
+                            "builtin.semantic.summary.v1", {"provider": "mock"}
+                        ),
+                        CompressionStepSpec("builtin.text.boundary_truncate.v1"),
+                    ),
+                ),
+            ),
+        )
+        providers = SummaryProviderRegistry(
+            [CallableSummaryProvider("mock", "mock-model", lambda _request: "alpha beta")]
+        )
+        arena = ContextLeaseArena(definition, summary_providers=providers)
+        result = arena.prepare(
+            ModelProfile("tiny", 4, 0),
+            [
+                ModuleContribution(
+                    "memory",
+                    (
+                        PromptChunk(
+                            "facts",
+                            "alpha beta gamma delta epsilon",
+                            required_terms=("alpha",),
+                        ),
+                    ),
+                )
+            ],
+            request_id="semantic-facade-r1",
+        )
+        self.assertIn("alpha", result.rendered)
+        self.assertTrue(result.module_plans[0].chunks[0].compressed)
 
     def test_donor_growth_reclaims_lease_and_compresses_borrower(self):
         arena = self.make_arena(); model = ModelProfile("char-30", 30, 0, count_mode=CountMode.EXACT)
@@ -50,6 +114,18 @@ class RuntimeTests(unittest.TestCase):
         arena = self.make_arena()
         with self.assertRaisesRegex(Exception, "unknown contribution"):
             arena.prepare(ModelProfile("char", 30, 0), [ModuleContribution("missing", ())])
+
+    def test_exact_mode_requires_host_tokenizer(self):
+        definition = ArenaDefinition(
+            "exact-requires-tokenizer",
+            (ModuleDefinition("system", 0, 8, 8, can_borrow=False),),
+        )
+        arena = ContextLeaseArena(definition)
+        with self.assertRaisesRegex(Exception, "requires a host token counter"):
+            arena.prepare(
+                ModelProfile("exact", 8, 0, count_mode=CountMode.EXACT),
+                [ModuleContribution("system", (PromptChunk("c", "rules"),))],
+            )
 
     def test_duplicate_chunk_id_is_rejected(self):
         arena = self.make_arena()

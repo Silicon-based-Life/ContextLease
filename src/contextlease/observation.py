@@ -62,7 +62,11 @@ class ObservationStore:
             if snapshot is None:
                 return None
             dropped = self._dropped.get(arena_id, 0)
-            return replace(snapshot, health={**snapshot.health, "events_dropped": dropped})
+            native_dropped = int(snapshot.health.get("events_dropped", 0))
+            return replace(
+                snapshot,
+                health={**snapshot.health, "events_dropped": native_dropped + dropped},
+            )
 
     def events_after(self, arena_id: str, after_seq: int = 0, limit: int = 1000) -> list[TraceEvent]:
         safe_limit = max(1, min(limit, 10_000))

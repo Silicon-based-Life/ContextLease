@@ -7,10 +7,11 @@ namespace ContextLease
     /// <summary>Owns one in-process ContextLease arena backed by the Rust core.</summary>
     public sealed class ContextLeaseArena : IDisposable
     {
-        public const uint SupportedAbiVersion = 1;
+        public const uint SupportedAbiVersion = 2;
 
         private readonly object _sync = new object();
         private IntPtr _handle;
+        private NativeMethods.TokenCountCallback? _tokenCountCallback;
 
         public ContextLeaseArena(string definitionJson)
         {
@@ -37,6 +38,22 @@ namespace ContextLease
                 IntPtr value = NativeMethods.cl_core_version();
                 try { return Utf8.Read(value); }
                 finally { if (value != IntPtr.Zero) NativeMethods.cl_string_free(value); }
+            }
+        }
+
+        /// <summary>Registers the exact tokenizer used for exact/hybrid count modes.</summary>
+        public void SetTokenCounter(Func<string, int> countText)
+        {
+            if (countText == null) throw new ArgumentNullException(nameof(countText));
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                _tokenCountCallback = (text, _) =>
+                {
+                    try { return Math.Max(0, countText(Utf8.Read(text))); }
+                    catch { return -1; }
+                };
+                Check(NativeMethods.cl_arena_set_token_counter(_handle, _tokenCountCallback, IntPtr.Zero));
             }
         }
 
@@ -107,6 +124,57 @@ namespace ContextLease
             }
         }
 
+        public string SnapshotJson()
+        {
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                IntPtr output = IntPtr.Zero;
+                try
+                {
+                    Check(NativeMethods.cl_arena_snapshot_json(_handle, out output));
+                    return Utf8.Read(output);
+                }
+                finally { if (output != IntPtr.Zero) NativeMethods.cl_string_free(output); }
+            }
+        }
+
+        public string EventsJson(ulong afterSeq = 0, uint limit = 1000)
+        {
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                IntPtr output = IntPtr.Zero;
+                try
+                {
+                    Check(NativeMethods.cl_arena_events_json(_handle, afterSeq, limit, out output));
+                    return Utf8.Read(output);
+                }
+                finally { if (output != IntPtr.Zero) NativeMethods.cl_string_free(output); }
+            }
+        }
+
+        public string RecordUsageJson(string observationJson)
+        {
+            if (observationJson == null) throw new ArgumentNullException(nameof(observationJson));
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                IntPtr input = Utf8.Alloc(observationJson);
+                IntPtr output = IntPtr.Zero;
+                try
+                {
+                    Check(NativeMethods.cl_arena_record_usage(_handle, input, out output));
+                    return Utf8.Read(output);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(input);
+                    if (output != IntPtr.Zero) NativeMethods.cl_string_free(output);
+                }
+            }
+        }
+
         public void Dispose()
         {
             lock (_sync)
@@ -114,6 +182,7 @@ namespace ContextLease
                 if (_handle == IntPtr.Zero) return;
                 NativeMethods.cl_arena_free(_handle);
                 _handle = IntPtr.Zero;
+                _tokenCountCallback = null;
             }
             GC.SuppressFinalize(this);
         }

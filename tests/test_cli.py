@@ -17,10 +17,17 @@ class CliTests(unittest.TestCase):
     def test_bundled_demo_and_schema_are_valid_json(self):
         demo = resources.files("contextlease.examples").joinpath("demo.json")
         schema = resources.files("contextlease.schema").joinpath("contextlease.schema.json")
+        runtime_schema = resources.files("contextlease.schema").joinpath(
+            "contextlease.runtime.schema.json"
+        )
         self.assertEqual(json.loads(demo.read_text(encoding="utf-8"))["arena"]["arena_id"], "agent-demo")
         self.assertEqual(
             json.loads(schema.read_text(encoding="utf-8"))["$schema"],
             "https://json-schema.org/draft/2020-12/schema",
+        )
+        self.assertIn(
+            "prepared_context_plan",
+            json.loads(runtime_schema.read_text(encoding="utf-8"))["$defs"],
         )
 
     def test_validate_command(self):
@@ -35,7 +42,7 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as exit_context, redirect_stdout(output):
             main(["--version"])
         self.assertEqual(exit_context.exception.code, 0)
-        self.assertEqual(output.getvalue().strip(), "contextlease 0.2.0")
+        self.assertEqual(output.getvalue().strip(), "contextlease 0.3.0")
 
     def test_prepare_hides_content_by_default(self):
         output = io.StringIO()
