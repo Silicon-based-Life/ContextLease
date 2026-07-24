@@ -82,7 +82,7 @@ func TestSharedRuntimeCases(t *testing.T) {
 
 func TestClosedArenaRejectsPrepare(t *testing.T) {
 	arena, err := NewArena([]byte(
-		`{"arena_id":"closed","modules":[]}`,
+		`{"arena_id":"closed","modules":[{"module_id":"memory","floor_tokens":0,"target_tokens":1,"max_tokens":1}]}`,
 	))
 	if err != nil {
 		t.Fatal(err)
