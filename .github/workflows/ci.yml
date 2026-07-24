@@ -85,7 +85,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.75.0
-      - run: cargo check --workspace
+      - name: Check committed dependency graph on MSRV
+        run: cargo check --workspace --all-targets --locked
+      - name: Check fresh dependency resolution on MSRV
+        run: |
+          rm Cargo.lock
+          cargo check --workspace --all-targets
 
   native-artifacts:
     strategy:

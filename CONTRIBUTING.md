@@ -53,6 +53,22 @@ The C and C++ smoke programs are built in CI with warnings treated as errors.
 Release changes must also build the wheel, execute
 `scripts/verify_installed_wheel.py`, and validate every packaged consumer.
 
+## Dependency updates and Rust MSRV
+
+ContextLease supports Rust 1.75 as its minimum supported Rust version (MSRV).
+Cargo dependency updates must pass both forms of the `rust-msrv` CI check:
+
+- the committed `Cargo.lock`, using `cargo check --workspace --all-targets --locked`;
+- a fresh dependency resolution after removing `Cargo.lock`.
+
+Dependabot groups Cargo patch releases only. Minor and major releases remain
+isolated for review because a `0.x` minor release can contain breaking API or
+MSRV changes. The `sha2` dependency intentionally stays on the compatible
+`0.10.x` line. Moving it to `0.11` or later requires one focused pull request
+that updates the API usage, the declared MSRV, CI, and compatibility notes
+together; remove the matching Dependabot ignore rule only as part of that
+migration.
+
 ## Pull requests
 
 1. Keep the core dependency-free unless there is a documented architectural reason.
