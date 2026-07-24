@@ -1,0 +1,5 @@
+# Modern Cargo versions should prefer dependency releases compatible with the
+# workspace's declared Rust 1.75 MSRV. The Rust 1.75 CI job remains the
+# authoritative check for both locked and freshly resolved dependency graphs.
+[resolver]
+incompatible-rust-versions = "fallback"

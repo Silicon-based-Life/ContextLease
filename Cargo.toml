@@ -15,4 +15,6 @@ rust-version = "1.75"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# sha2 0.11 requires Rust 1.85 and an API migration. Keep this requirement
+# within the Rust 1.75-compatible 0.10.x line until that migration is approved.
 sha2 = "0.10"

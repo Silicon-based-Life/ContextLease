@@ -12,8 +12,18 @@ updates:
     schedule:
       interval: weekly
     groups:
-      rust:
+      rust-patch:
+        applies-to: version-updates
         patterns: ["*"]
+        update-types: ["patch"]
+    ignore:
+      # ContextLease promises Rust 1.75 support. sha2 0.11 requires a newer
+      # toolchain and contains API changes, so crossing this compatibility
+      # boundary must be an explicit maintainer decision.
+      - dependency-name: sha2
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
   - package-ecosystem: pip
     directory: /
     schedule:
