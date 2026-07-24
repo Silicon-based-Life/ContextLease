@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -1833,9 +1832,35 @@ fn unix_millis() -> u128 {
 }
 
 fn timestamp_now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| format!("{}Z", unix_millis()))
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format_utc_timestamp(duration.as_secs(), duration.subsec_millis())
+}
+
+fn format_utc_timestamp(unix_seconds: u64, milliseconds: u32) -> String {
+    let days = (unix_seconds / 86_400) as i64;
+    let seconds_in_day = unix_seconds % 86_400;
+    let hour = seconds_in_day / 3_600;
+    let minute = (seconds_in_day % 3_600) / 60;
+    let second = seconds_in_day % 60;
+
+    // Convert days since 1970-01-01 to the proleptic Gregorian calendar.
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milliseconds:03}Z")
 }
 
 fn calibration_key(model: &ModelProfile) -> String {
@@ -2120,6 +2145,16 @@ fn reject_admission() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_timestamp_format_is_rfc3339() {
+        assert_eq!(format_utc_timestamp(0, 0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(
+            format_utc_timestamp(946_684_800, 123),
+            "2000-01-01T00:00:00.123Z"
+        );
+    }
+
     fn module(id: &str, floor: i32, target: i32, max: i32, order: i32) -> ModuleDefinition {
         ModuleDefinition {
             module_id: id.into(),
