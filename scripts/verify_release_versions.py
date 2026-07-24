@@ -5,7 +5,6 @@ import pathlib
 import re
 import sys
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -24,17 +23,27 @@ def collect_versions() -> dict[str, str]:
         "dotnet": extract(r"<Version>([^<]+)</Version>", ROOT / "bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.csproj"),
         "citation": extract(r"^version:\s*([^\s]+)", ROOT / "CITATION.cff"),
         "native_packager": extract(r'^VERSION\s*=\s*"([^"]+)"', ROOT / "scripts/package_native.py"),
+        "dotnet_assets": extract(
+            r'^VERSION\s*=\s*"([^"]+)"',
+            ROOT / "scripts/prepare_dotnet_native_assets.py",
+        ),
     }
 
 
 def verify_abi() -> None:
     rust = extract(r"^pub const ABI_VERSION:\s*u32\s*=\s*(\d+);", ROOT / "rust/contextlease-ffi/src/lib.rs")
     packager = extract(r'^ABI\s*=\s*"(\d+)"', ROOT / "scripts/package_native.py")
+    dotnet_assets = extract(
+        r'^ABI\s*=\s*"(\d+)"',
+        ROOT / "scripts/prepare_dotnet_native_assets.py",
+    )
     dotnet = extract(r"SupportedAbiVersion\s*=\s*(\d+);", ROOT / "bindings/dotnet/src/ContextLease.Managed/ContextLeaseArena.cs")
     go = extract(r"SupportedABIVersion\s+uint32\s*=\s*(\d+)", ROOT / "bindings/go/contextlease.go")
-    if len({rust, packager, dotnet, go}) != 1:
+    if len({rust, packager, dotnet_assets, dotnet, go}) != 1:
         raise RuntimeError(
-            f"ABI mismatch: rust={rust}, packager={packager}, dotnet={dotnet}, go={go}"
+            "ABI mismatch: "
+            f"rust={rust}, packager={packager}, dotnet_assets={dotnet_assets}, "
+            f"dotnet={dotnet}, go={go}"
         )
 
 

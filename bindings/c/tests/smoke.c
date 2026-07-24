@@ -4,6 +4,11 @@
 #include <string.h>
 
 int main(void) {
+    contextlease_arena_t *invalid_arena = NULL;
+    if (cl_arena_create("{", &invalid_arena) != CL_INVALID_JSON) return 10;
+    if (invalid_arena != NULL) return 11;
+    if (strstr(cl_last_error(), "invalid_json") == NULL) return 12;
+
     const char *definition =
         "{\"arena_id\":\"c-smoke\",\"modules\":[{\"module_id\":\"system\","
         "\"floor_tokens\":0,\"target_tokens\":8,\"max_tokens\":8}]}";

@@ -109,6 +109,13 @@ pub extern "C" fn cl_core_version() -> *mut c_char {
 }
 
 #[no_mangle]
+/// Creates an arena from a UTF-8 JSON definition.
+///
+/// # Safety
+///
+/// `json` must point to a valid NUL-terminated string and `out` must be a
+/// writable pointer. On success, the returned handle must be released with
+/// [`cl_arena_free`].
 pub unsafe extern "C" fn cl_arena_create(json: *const c_char, out: *mut *mut ArenaHandle) -> i32 {
     if out.is_null() {
         set_error("invalid_argument", "out arena is null");
@@ -145,6 +152,13 @@ pub unsafe extern "C" fn cl_arena_create(json: *const c_char, out: *mut *mut Are
 }
 
 #[no_mangle]
+/// Prepares a context plan and returns owned UTF-8 JSON.
+///
+/// # Safety
+///
+/// `arena` must be a live handle created by [`cl_arena_create`], `json` must
+/// point to a valid NUL-terminated string, and `out` must be writable. The
+/// returned string must be released with [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_prepare(
     arena: *mut ArenaHandle,
     json: *const c_char,
@@ -204,6 +218,13 @@ pub unsafe extern "C" fn cl_arena_prepare(
 }
 
 #[no_mangle]
+/// Starts a two-phase prepare operation.
+///
+/// # Safety
+///
+/// `arena` must be live, `json` must point to a valid NUL-terminated string,
+/// and `out` must be writable. The returned string must be released with
+/// [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_prepare_begin(
     arena: *mut ArenaHandle,
     json: *const c_char,
@@ -254,6 +275,13 @@ pub unsafe extern "C" fn cl_arena_prepare_begin(
 }
 
 #[no_mangle]
+/// Commits provider results for a two-phase prepare operation.
+///
+/// # Safety
+///
+/// `arena` must be live, both JSON pointers must reference valid
+/// NUL-terminated strings, and `out` must be writable. The returned string
+/// must be released with [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_prepare_commit(
     arena: *mut ArenaHandle,
     request_json: *const c_char,
@@ -328,6 +356,13 @@ unsafe fn write_json_result<T: Serialize>(value: &T, out: *mut *mut c_char) -> i
 }
 
 #[no_mangle]
+/// Registers or clears the synchronous host token counter.
+///
+/// # Safety
+///
+/// `arena` must be a live handle. When `callback` is present, `user_data` and
+/// all callback state must remain valid until the callback is replaced or the
+/// arena is freed. The callback must not re-enter the same arena.
 pub unsafe extern "C" fn cl_arena_set_token_counter(
     arena: *mut ArenaHandle,
     callback: Option<TokenCountCallback>,
@@ -352,6 +387,12 @@ pub unsafe extern "C" fn cl_arena_set_token_counter(
 }
 
 #[no_mangle]
+/// Returns the latest content-free snapshot as owned UTF-8 JSON.
+///
+/// # Safety
+///
+/// `arena` must be live and `out` must be writable. The returned string must
+/// be released with [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_snapshot_json(
     arena: *mut ArenaHandle,
     out: *mut *mut c_char,
@@ -375,6 +416,12 @@ pub unsafe extern "C" fn cl_arena_snapshot_json(
 }
 
 #[no_mangle]
+/// Returns content-free events as owned UTF-8 JSON.
+///
+/// # Safety
+///
+/// `arena` must be live and `out` must be writable. The returned string must
+/// be released with [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_events_json(
     arena: *mut ArenaHandle,
     after_seq: u64,
@@ -402,6 +449,13 @@ pub unsafe extern "C" fn cl_arena_events_json(
 }
 
 #[no_mangle]
+/// Records provider-reported token usage and returns calibration JSON.
+///
+/// # Safety
+///
+/// `arena` must be live, `observation_json` must point to a valid
+/// NUL-terminated string, and `out` must be writable. The returned string must
+/// be released with [`cl_string_free`].
 pub unsafe extern "C" fn cl_arena_record_usage(
     arena: *mut ArenaHandle,
     observation_json: *const c_char,
@@ -436,6 +490,12 @@ pub unsafe extern "C" fn cl_arena_record_usage(
 }
 
 #[no_mangle]
+/// Releases an arena handle.
+///
+/// # Safety
+///
+/// `arena` must be null or a handle returned by [`cl_arena_create`] that has
+/// not already been freed.
 pub unsafe extern "C" fn cl_arena_free(arena: *mut ArenaHandle) {
     if !arena.is_null() {
         drop(Box::from_raw(arena));
@@ -443,6 +503,12 @@ pub unsafe extern "C" fn cl_arena_free(arena: *mut ArenaHandle) {
 }
 
 #[no_mangle]
+/// Releases a string returned by a ContextLease FFI function.
+///
+/// # Safety
+///
+/// `value` must be null or a pointer returned by ContextLease that has not
+/// already been freed.
 pub unsafe extern "C" fn cl_string_free(value: *mut c_char) {
     if !value.is_null() {
         drop(CString::from_raw(value));

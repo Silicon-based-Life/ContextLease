@@ -1811,9 +1811,7 @@ pub fn count_text(text: &str) -> i32 {
     let mut in_word = false;
     for ch in text.chars() {
         let word = ch.is_alphanumeric() || ch == '_';
-        if word && !in_word {
-            tokens += 1;
-        } else if !word && !ch.is_whitespace() {
+        if (word && !in_word) || (!word && !ch.is_whitespace()) {
             tokens += 1;
         }
         in_word = word;

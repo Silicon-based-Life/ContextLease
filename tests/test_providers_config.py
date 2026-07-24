@@ -8,10 +8,20 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from contextlease.config import arena_from_dict, load_json_config, model_from_dict, providers_from_dict
+from contextlease.config import (
+    arena_from_dict,
+    load_json_config,
+    model_from_dict,
+    providers_from_dict,
+)
 from contextlease.errors import ConfigurationError, ProviderError
 from contextlease.layout import compile_layout
-from contextlease.providers import CallableSummaryProvider, OpenAICompatibleSummaryProvider, SummaryProviderRegistry, SummaryRequest
+from contextlease.providers import (
+    CallableSummaryProvider,
+    OpenAICompatibleSummaryProvider,
+    SummaryProviderRegistry,
+    SummaryRequest,
+)
 
 
 class ProviderHandler(BaseHTTPRequestHandler):
@@ -26,13 +36,18 @@ class ProviderHandler(BaseHTTPRequestHandler):
         type(self).received_auth = self.headers.get("Authorization")
         type(self).received_payload = json.loads(self.rfile.read(length))
         body = json.dumps({"choices": [{"message": {"content": "blue lighthouse unresolved"}}], "usage": {"prompt_tokens": 12, "completion_tokens": 3}}).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class ProviderTests(unittest.TestCase):
     def test_openai_compatible_provider_uses_environment_key(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         os.environ["CONTEXTLEASE_TEST_KEY"] = "unit-secret"
         try:
             provider = OpenAICompatibleSummaryProvider("mock-http", "model-a", f"http://127.0.0.1:{server.server_address[1]}/v1", api_key_env="CONTEXTLEASE_TEST_KEY")
@@ -42,7 +57,10 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(ProviderHandler.received_auth, "Bearer unit-secret")
             self.assertNotIn("unit-secret", json.dumps(ProviderHandler.received_payload))
         finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2); os.environ.pop("CONTEXTLEASE_TEST_KEY", None)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            os.environ.pop("CONTEXTLEASE_TEST_KEY", None)
 
     def test_missing_environment_key_fails(self):
         provider = OpenAICompatibleSummaryProvider("missing", "m", "http://localhost:1/v1", api_key_env="MISSING_CONTEXTLEASE_KEY")

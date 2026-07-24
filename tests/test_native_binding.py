@@ -5,9 +5,9 @@ import os
 import unittest
 from pathlib import Path
 
-from contextlease.native import NativeArena
 from contextlease.config import arena_from_dict
 from contextlease.layout import compile_layout
+from contextlease.native import NativeArena
 from contextlease.tokenization import CharacterTokenCounter
 
 

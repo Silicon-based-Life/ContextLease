@@ -4,7 +4,6 @@ import argparse
 import pathlib
 import shutil
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = "0.3.0"
 ABI = "2"

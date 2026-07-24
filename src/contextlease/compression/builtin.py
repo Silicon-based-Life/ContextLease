@@ -12,7 +12,6 @@ from ..errors import CompressionError
 from ..providers import SummaryProviderRegistry, SummaryRequest
 from .contracts import CompressionRequest, CompressionResult
 
-
 AlgorithmFunction = Callable[[CompressionRequest], tuple[Any, Sequence[Any], Mapping[str, Any]]]
 
 

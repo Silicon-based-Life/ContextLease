@@ -39,6 +39,11 @@ Build `bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.csproj`. Th
 targets `netstandard2.0` and `net471`. Put the managed assembly on the application reference
 path and the native library on its native search path.
 
+Release NuGet packages include the qualified native library under
+`runtimes/win-x64/native`, `runtimes/linux-x64/native`, and
+`runtimes/osx-arm64/native`. A source build still requires you to place the native
+library manually.
+
 The managed binding uses the ABI- and release-qualified native name `contextlease_native_abi2_v0_3_0` so a new
 ABI-compatible build can be deployed beside an older DLL that is still loaded by Unity.
 For Unity on Windows:

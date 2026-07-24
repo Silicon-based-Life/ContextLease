@@ -7,7 +7,6 @@ from contextlease.errors import LayoutValidationError
 from contextlease.layout import compile_layout, validate_model_budget
 from contextlease.models import ArenaDefinition, CompressionStepSpec, ModuleDefinition
 
-
 PIPELINE = (CompressionStepSpec("builtin.text.boundary_truncate.v1"),)
 
 

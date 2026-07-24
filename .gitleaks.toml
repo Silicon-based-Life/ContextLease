@@ -1,0 +1,20 @@
+title = "ContextLease Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore generated and local verification artifacts"
+paths = [
+  '''(^|/)\.verify/''',
+  '''(^|/)build/''',
+  '''(^|/)target/''',
+]
+
+[[allowlists]]
+description = "The public tokenizer identifier is configuration, not a credential"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''tokenizer_id.*regex-estimator-v1''',
+]

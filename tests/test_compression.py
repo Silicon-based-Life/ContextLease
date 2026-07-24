@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from contextlease.compression import CompressionPipeline, CompressionRequest, create_builtin_registry
+from contextlease.compression import (
+    CompressionPipeline,
+    CompressionRequest,
+    create_builtin_registry,
+)
 from contextlease.models import CompressionStepSpec
 from contextlease.providers import CallableSummaryProvider, SummaryProviderRegistry
 from contextlease.tokenization import CharacterTokenCounter, RegexTokenCounter

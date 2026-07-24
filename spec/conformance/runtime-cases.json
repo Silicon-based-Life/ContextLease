@@ -1,0 +1,328 @@
+{
+  "cases": [
+    {
+      "name": "balanced-no-borrow",
+      "definition": {
+        "arena_id": "balanced-no-borrow",
+        "modules": [
+          {
+            "module_id": "system",
+            "floor_tokens": 0,
+            "target_tokens": 3,
+            "max_tokens": 3,
+            "order": 0,
+            "can_borrow": false
+          },
+          {
+            "module_id": "memory",
+            "floor_tokens": 0,
+            "target_tokens": 3,
+            "max_tokens": 3,
+            "order": 1,
+            "can_borrow": false
+          }
+        ]
+      },
+      "request": {
+        "request_id": "balanced-no-borrow",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 6,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "system",
+            "chunks": [{"chunk_id": "rules", "content": "alpha beta"}]
+          },
+          {
+            "module_id": "memory",
+            "chunks": [{"chunk_id": "facts", "content": "gamma delta"}]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 6,
+        "must_contain": ["alpha beta", "gamma delta"],
+        "expected_modules": ["system", "memory"],
+        "render_order": ["alpha beta", "gamma delta"]
+      }
+    },
+    {
+      "name": "weighted-lease",
+      "definition": {
+        "arena_id": "weighted-lease",
+        "modules": [
+          {
+            "module_id": "donor",
+            "floor_tokens": 0,
+            "target_tokens": 5,
+            "max_tokens": 5,
+            "order": 0,
+            "can_borrow": false
+          },
+          {
+            "module_id": "borrower",
+            "floor_tokens": 1,
+            "target_tokens": 2,
+            "max_tokens": 8,
+            "order": 1,
+            "reclaim_pipeline": [
+              {"algorithm_id": "builtin.text.boundary_truncate.v1"}
+            ]
+          }
+        ]
+      },
+      "request": {
+        "request_id": "weighted-lease",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 9,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "donor",
+            "chunks": [{"chunk_id": "base", "content": "base"}]
+          },
+          {
+            "module_id": "borrower",
+            "chunks": [{"chunk_id": "history", "content": "one two three four five"}]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 9,
+        "must_contain": ["base", "one two three four five"],
+        "expected_modules": ["donor", "borrower"],
+        "lease_borrower": "borrower"
+      }
+    },
+    {
+      "name": "max-cap-reclaim",
+      "definition": {
+        "arena_id": "max-cap-reclaim",
+        "modules": [
+          {
+            "module_id": "memory",
+            "floor_tokens": 0,
+            "target_tokens": 2,
+            "max_tokens": 2,
+            "can_borrow": false,
+            "reclaim_pipeline": [
+              {"algorithm_id": "builtin.text.boundary_truncate.v1"}
+            ]
+          }
+        ]
+      },
+      "request": {
+        "request_id": "max-cap-reclaim",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 8,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "memory",
+            "chunks": [{"chunk_id": "history", "content": "one two three four five"}]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 2,
+        "expected_modules": ["memory"]
+      }
+    },
+    {
+      "name": "pinned-preserved",
+      "definition": {
+        "arena_id": "pinned-preserved",
+        "modules": [
+          {
+            "module_id": "system",
+            "floor_tokens": 2,
+            "target_tokens": 4,
+            "max_tokens": 4,
+            "protection": "pinned",
+            "can_borrow": false
+          }
+        ]
+      },
+      "request": {
+        "request_id": "pinned-preserved",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 4,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "system",
+            "chunks": [
+              {
+                "chunk_id": "rules",
+                "content": "never invent",
+                "fixed": true,
+                "protection": "pinned"
+              }
+            ]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 4,
+        "must_contain": ["never invent"],
+        "expected_modules": ["system"]
+      }
+    },
+    {
+      "name": "unicode-estimated",
+      "definition": {
+        "arena_id": "unicode-estimated",
+        "modules": [
+          {
+            "module_id": "memory",
+            "floor_tokens": 0,
+            "target_tokens": 4,
+            "max_tokens": 4,
+            "can_borrow": false
+          }
+        ]
+      },
+      "request": {
+        "request_id": "unicode-estimated",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 4,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "memory",
+            "chunks": [{"chunk_id": "fact", "content": "你好 世界 café"}]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 4,
+        "must_contain": ["你好", "café"],
+        "expected_modules": ["memory"]
+      }
+    },
+    {
+      "name": "framework-reserve",
+      "definition": {
+        "arena_id": "framework-reserve",
+        "framework_reserve_tokens": 3,
+        "modules": [
+          {
+            "module_id": "memory",
+            "floor_tokens": 0,
+            "target_tokens": 20,
+            "max_tokens": 20,
+            "can_borrow": false,
+            "reclaim_pipeline": [
+              {"algorithm_id": "builtin.text.boundary_truncate.v1"}
+            ]
+          }
+        ]
+      },
+      "request": {
+        "request_id": "framework-reserve",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 10,
+          "reserved_output_tokens": 2
+        },
+        "contributions": [
+          {
+            "module_id": "memory",
+            "chunks": [{"chunk_id": "history", "content": "one two three four five six seven eight"}]
+          }
+        ]
+      },
+      "assert": {
+        "input_budget_tokens": 5,
+        "max_prompt_tokens": 5,
+        "expected_modules": ["memory"]
+      }
+    },
+    {
+      "name": "empty-contribution",
+      "definition": {
+        "arena_id": "empty-contribution",
+        "modules": [
+          {
+            "module_id": "memory",
+            "floor_tokens": 0,
+            "target_tokens": 4,
+            "max_tokens": 4,
+            "can_borrow": false
+          }
+        ]
+      },
+      "request": {
+        "request_id": "empty-contribution",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 4,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [{"module_id": "memory", "chunks": []}]
+      },
+      "assert": {
+        "max_prompt_tokens": 0,
+        "expected_modules": ["memory"]
+      }
+    },
+    {
+      "name": "module-order",
+      "definition": {
+        "arena_id": "module-order",
+        "modules": [
+          {
+            "module_id": "second",
+            "floor_tokens": 0,
+            "target_tokens": 2,
+            "max_tokens": 2,
+            "order": 1,
+            "can_borrow": false
+          },
+          {
+            "module_id": "first",
+            "floor_tokens": 0,
+            "target_tokens": 2,
+            "max_tokens": 2,
+            "order": 0,
+            "can_borrow": false
+          }
+        ]
+      },
+      "request": {
+        "request_id": "module-order",
+        "model": {
+          "model_profile_id": "estimated",
+          "context_limit_tokens": 4,
+          "reserved_output_tokens": 0
+        },
+        "contributions": [
+          {
+            "module_id": "second",
+            "chunks": [{"chunk_id": "second", "content": "second"}]
+          },
+          {
+            "module_id": "first",
+            "chunks": [{"chunk_id": "first", "content": "first"}]
+          }
+        ]
+      },
+      "assert": {
+        "max_prompt_tokens": 4,
+        "must_contain": ["first", "second"],
+        "expected_modules": ["first", "second"],
+        "render_order": ["first", "second"]
+      }
+    }
+  ]
+}

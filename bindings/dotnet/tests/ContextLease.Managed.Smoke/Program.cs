@@ -1,7 +1,8 @@
 using System.Text.Json;
 using ContextLease;
 
-if (args.Length != 1) throw new ArgumentException("Pass the conformance fixture path.");
+if (args.Length is < 1 or > 2)
+    throw new ArgumentException("Pass basic-borrow.json and optionally runtime-cases.json.");
 
 using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(args[0]));
 JsonElement root = fixture.RootElement;
@@ -72,3 +73,32 @@ using JsonDocument exact = JsonDocument.Parse(exactArena.PrepareJson(exactReques
 if (exact.RootElement.GetProperty("prompt_tokens").GetInt32() != "alpha beta".Length)
     throw new InvalidOperationException("Exact tokenizer callback was not used.");
 Console.WriteLine("ContextLease .NET exact tokenizer smoke passed");
+
+if (args.Length == 2)
+{
+    using JsonDocument casesDocument = JsonDocument.Parse(File.ReadAllText(args[1]));
+    JsonElement cases = casesDocument.RootElement.GetProperty("cases");
+    if (cases.GetArrayLength() < 8)
+        throw new InvalidOperationException("Expected at least eight shared runtime cases.");
+    foreach (JsonElement item in cases.EnumerateArray())
+    {
+        string name = item.GetProperty("name").GetString()!;
+        string caseDefinition = item.GetProperty("definition").GetRawText();
+        string caseRequest = item.GetProperty("request").GetRawText();
+        JsonElement caseExpected = item.GetProperty("assert");
+        using var caseArena = new ContextLeaseArena(caseDefinition);
+        using JsonDocument caseResult = JsonDocument.Parse(caseArena.PrepareJson(caseRequest));
+        JsonElement casePrepared = caseResult.RootElement;
+        if (casePrepared.GetProperty("prompt_tokens").GetInt32()
+            > caseExpected.GetProperty("max_prompt_tokens").GetInt32())
+            throw new InvalidOperationException($"{name}: prepared prompt exceeds fixture budget.");
+        if (!caseExpected.TryGetProperty("must_contain", out JsonElement requiredTerms))
+            continue;
+        foreach (JsonElement term in requiredTerms.EnumerateArray())
+        {
+            if (!casePrepared.GetProperty("rendered").GetString()!.Contains(term.GetString()!))
+                throw new InvalidOperationException($"{name}: required fixture content was lost.");
+        }
+    }
+    Console.WriteLine($"ContextLease .NET shared conformance passed: {cases.GetArrayLength()} cases");
+}

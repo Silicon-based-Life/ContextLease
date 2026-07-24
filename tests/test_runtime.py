@@ -5,11 +5,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 from contextlease.enums import CountMode, ProtectionPolicy
 from contextlease.errors import AdmissionError
-from contextlease.models import ArenaDefinition, CompressionStepSpec, ModelProfile, ModuleContribution, ModuleDefinition, PromptChunk
+from contextlease.models import (
+    ArenaDefinition,
+    CompressionStepSpec,
+    ModelProfile,
+    ModuleContribution,
+    ModuleDefinition,
+    PromptChunk,
+)
+from contextlease.providers import CallableSummaryProvider, SummaryProviderRegistry
 from contextlease.runtime import ContextLeaseArena
 from contextlease.tokenization import CharacterTokenCounter
-from contextlease.providers import CallableSummaryProvider, SummaryProviderRegistry
-
 
 TRUNCATE = (CompressionStepSpec("builtin.text.boundary_truncate.v1"),)
 
@@ -97,7 +103,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(result.module_plans[0].chunks[0].compressed)
 
     def test_donor_growth_reclaims_lease_and_compresses_borrower(self):
-        arena = self.make_arena(); model = ModelProfile("char-30", 30, 0, count_mode=CountMode.EXACT)
+        arena = self.make_arena()
+        model = ModelProfile("char-30", 30, 0, count_mode=CountMode.EXACT)
         first = arena.prepare(model, [ModuleContribution("donor", (PromptChunk("d1", "12345"),)), ModuleContribution("borrower", (PromptChunk("b1", "abcdefghijklmnopqrst"),))], request_id="first")
         self.assertTrue(first.leases)
         second = arena.prepare(model, [ModuleContribution("donor", (PromptChunk("d2", "12345678901234567890"),)), ModuleContribution("borrower", (PromptChunk("b2", "abcdefghijklmnopqrst"),))], request_id="second")
@@ -106,7 +113,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(any(event.event_type == "chunk.compressed" for event in second.trace_events))
 
     def test_pinned_overflow_is_rejected(self):
-        arena = self.make_arena(); model = ModelProfile("char-30", 30, 0)
+        arena = self.make_arena()
+        model = ModelProfile("char-30", 30, 0)
         with self.assertRaises(AdmissionError):
             arena.prepare(model, [ModuleContribution("donor", (PromptChunk("d", "1234567890123456789012345", protection=ProtectionPolicy.PINNED),)), ModuleContribution("borrower", ())])
 

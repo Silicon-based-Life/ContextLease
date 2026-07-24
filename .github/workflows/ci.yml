@@ -16,13 +16,15 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Install package
-        run: python -m pip install .
+        run: python -m pip install ".[dev]"
+      - name: Lint Python
+        run: ruff check src tests scripts
       - name: Compile Python
         run: python -m compileall -q src
       - name: Run unit tests
@@ -33,8 +35,8 @@ jobs:
   web-syntax:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
       - run: node --check src/contextlease/debug/static/app.js
@@ -43,14 +45,15 @@ jobs:
   wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - run: python -m pip wheel . --no-deps --wheel-dir dist
       - run: python scripts/verify_python_wheel.py
-      - uses: actions/upload-artifact@v4
+      - run: python scripts/verify_installed_wheel.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: contextlease-wheel
           path: dist/*.whl
@@ -58,14 +61,15 @@ jobs:
   rust-core:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace --release
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - run: python -m pip install .
@@ -77,8 +81,10 @@ jobs:
   rust-msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.75.0
       - run: cargo check --workspace
 
   native-artifacts:
@@ -96,10 +102,10 @@ jobs:
             path: target/release/libcontextlease_native.dylib
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - run: cargo build -p contextlease-ffi --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.path }}
@@ -107,17 +113,17 @@ jobs:
   c-cpp-binding:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - run: cargo build -p contextlease-ffi --release
       - name: Compile C binding smoke
-        run: cc bindings/c/tests/smoke.c -Ibindings/c/include -Ltarget/release -lcontextlease_native -o target/contextlease-c-smoke
+        run: cc bindings/c/tests/smoke.c -Wall -Wextra -Werror -Ibindings/c/include -Ltarget/release -lcontextlease_native -o target/contextlease-c-smoke
       - name: Run C binding smoke
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
         run: target/contextlease-c-smoke
       - name: Compile C++ binding smoke
-        run: c++ bindings/cpp/tests/smoke.cpp -std=c++17 -Ibindings/c/include -Ibindings/cpp/include -Ltarget/release -lcontextlease_native -o target/contextlease-cpp-smoke
+        run: c++ bindings/cpp/tests/smoke.cpp -std=c++17 -Wall -Wextra -Werror -Ibindings/c/include -Ibindings/cpp/include -Ltarget/release -lcontextlease_native -o target/contextlease-cpp-smoke
       - name: Run C++ binding smoke
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
@@ -126,25 +132,25 @@ jobs:
   dotnet-binding:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "10.0.x"
       - run: cargo build -p contextlease-ffi --release
       - run: cp target/release/libcontextlease_native.so target/release/libcontextlease_native_abi2_v0_3_0.so
-      - run: dotnet build bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.csproj -c Release
+      - run: dotnet build bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.csproj -c Release -warnaserror
       - name: .NET to Rust ABI smoke
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
-        run: dotnet run --project bindings/dotnet/tests/ContextLease.Managed.Smoke/ContextLease.Managed.Smoke.csproj -c Release -- spec/conformance/basic-borrow.json
+        run: dotnet run --project bindings/dotnet/tests/ContextLease.Managed.Smoke/ContextLease.Managed.Smoke.csproj -c Release -- spec/conformance/basic-borrow.json spec/conformance/runtime-cases.json
 
   go-binding:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.22.x"
       - run: cargo build -p contextlease-ffi --release
@@ -154,13 +160,16 @@ jobs:
         working-directory: bindings/go
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/bindings/go/native/linux-x86_64
-        run: go test ./...
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
 
   release-metadata:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - run: python scripts/verify_release_versions.py

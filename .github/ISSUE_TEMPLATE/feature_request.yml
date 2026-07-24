@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a scoped ContextLease capability or extension.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user problem before proposing an API.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Minimal proposal
+      description: What is the smallest useful behavior?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Compatibility impact
+      options:
+        - label: JSON Schema or DTO
+        - label: Rust behavior
+        - label: Native ABI
+        - label: Language bindings
+        - label: Packaging or release artifacts
+        - label: Debug Web or telemetry
+  - type: textarea
+    id: validation
+    attributes:
+      label: Suggested validation
+      description: Fixtures, invariants, replay cases, benchmarks, or consumer tests.
