@@ -23,7 +23,6 @@ from contextlease.enums import (
 from contextlease.errors import ConfigurationError
 from contextlease.models import ContextPlan, PreparedContextPlan
 
-
 ROOT = Path(__file__).parents[1]
 SCHEMA = json.loads(
     (ROOT / "src" / "contextlease" / "schema" / "contextlease.schema.json").read_text(encoding="utf-8")

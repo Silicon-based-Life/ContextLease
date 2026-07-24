@@ -27,7 +27,6 @@ from .providers import (
     SummaryProviderRegistry,
 )
 
-
 _FORBIDDEN_SECRET_KEYS = {"api_key", "authorization", "secret", "token", "password"}
 _ROOT_KEYS = {"arena", "model", "providers", "contributions"}
 _ARENA_KEYS = {

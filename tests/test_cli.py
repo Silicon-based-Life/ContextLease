@@ -9,7 +9,6 @@ from pathlib import Path
 
 from contextlease.cli import main
 
-
 DEMO = Path(__file__).parents[1] / "examples" / "demo.json"
 
 
@@ -49,14 +48,16 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(output):
             code = main(["prepare", str(DEMO), "--request-id", "cli-test"])
         payload = json.loads(output.getvalue())
-        self.assertEqual(code, 0); self.assertEqual(payload["request_id"], "cli-test")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["request_id"], "cli-test")
         self.assertIn("hidden", payload["rendered"])
 
     def test_invalid_config_returns_nonzero(self):
         error = io.StringIO()
         with redirect_stderr(error):
             code = main(["validate", "missing.json"])
-        self.assertEqual(code, 2); self.assertIn("error", error.getvalue())
+        self.assertEqual(code, 2)
+        self.assertIn("error", error.getvalue())
 
 
 if __name__ == "__main__":

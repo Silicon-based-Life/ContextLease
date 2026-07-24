@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible ContextLease defect.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic prompt data. Never include credentials or private prompt content.
+  - type: input
+    id: version
+    attributes:
+      label: ContextLease version
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: binding
+    attributes:
+      label: Binding
+      options:
+        - Rust
+        - Python
+        - C
+        - C++
+        - Go
+        - .NET / Unity
+        - Debug Web
+        - Packaging / release
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, runtime/compiler, and native ABI version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a minimal synthetic arena, request, and commands.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Sanitized logs, snapshots, events, or a fixture link.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, private prompt bodies, and proprietary data.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

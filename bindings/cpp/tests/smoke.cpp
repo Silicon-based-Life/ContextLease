@@ -3,6 +3,14 @@
 #include <string>
 
 int main() {
+    bool rejected_invalid = false;
+    try {
+        contextlease::arena invalid("{");
+    } catch (const contextlease::error&) {
+        rejected_invalid = true;
+    }
+    if (!rejected_invalid) return 10;
+
     const std::string definition =
         R"({"arena_id":"cpp-smoke","modules":[{"module_id":"system","floor_tokens":0,"target_tokens":8,"max_tokens":8}]})";
     const std::string request =

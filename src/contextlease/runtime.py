@@ -19,7 +19,6 @@ from .models import (
     PreparedChunk,
     PreparedContextPlan,
     PreparedModulePlan,
-    PromptChunk,
     TraceEvent,
     UsageCalibration,
     to_public_dict,

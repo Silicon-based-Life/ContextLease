@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Silicon-based-Life/ContextLease/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-5de4c7">
+  <img alt="Status Alpha" src="https://img.shields.io/badge/status-alpha-ffd166">
   <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-f5a97f">
   <a href="https://www.python.org/"><img alt="Python 3.11–3.14" src="https://img.shields.io/badge/python-3.11%E2%80%933.14-82aaff"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-d7a8ff"></a>
@@ -15,6 +16,11 @@
 It is designed for agent runtimes, RAG systems, assistants, and any application where system rules, tools, memory, retrieved documents, and conversation history compete for the same context window.
 
 > The central rule: **a module may borrow tokens only after registering how those tokens can be released.**
+
+> [!IMPORTANT]
+> ContextLease is currently an alpha-stage `0.x` project. It is ready for
+> evaluation and controlled integrations, but not yet a compatibility-stable
+> `1.0` release. See the [stability policy](docs/stability.md).
 
 ## Why ContextLease
 
@@ -305,16 +311,30 @@ dotnet build bindings/dotnet/src/ContextLease.Managed/ContextLease.Managed.cspro
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [architecture](docs/architecture.md),
-[native bindings](docs/native-bindings.md), [provider guide](docs/providers.md), and
+[stability policy](docs/stability.md), [native bindings](docs/native-bindings.md),
+[roadmap](docs/roadmap.md), [provider guide](docs/providers.md),
+[support policy](SUPPORT.md), and
 [release guide](docs/releasing.md).
 
 ## Release artifacts
 
 Tagged releases produce Python wheel/source packages, `ContextLease.Managed` NuGet
-packages, and native SDK ZIPs for Windows x86-64, Linux x86-64, and macOS arm64.
+packages with RID-native assets, and native SDK ZIPs for Windows x86-64,
+Linux x86-64, and macOS arm64.
 Every native archive contains the C/C++ headers, the ABI- and release-qualified shared
 library, license files, and integration documentation. GitHub releases include
 `SHA256SUMS.txt`; registry publication remains an explicit reviewed step.
+
+| Artifact | Alpha release targets | Consumer validation |
+|---|---|---|
+| Python wheel | CPython 3.11–3.14; Windows x64, Linux x64, macOS arm64 | clean-venv install plus native prepare |
+| NuGet | `netstandard2.0`, `net471`; `win-x64`, `linux-x64`, `osx-arm64` native assets | isolated `net8.0` consumer |
+| Native SDK | C ABI/C++ header on Windows x64, Linux x64, macOS arm64 | compile-and-run smoke tests |
+| Go module | cgo wrapper over the native SDK | shared conformance fixtures |
+
+No registry package should be assumed available until its registry page is linked
+from an annotated GitHub release. Source installation remains the supported alpha
+path.
 
 ## Search keywords
 

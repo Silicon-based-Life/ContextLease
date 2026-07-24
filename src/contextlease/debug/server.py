@@ -15,7 +15,6 @@ from ..errors import ConfigurationError
 from ..models import to_public_dict
 from ..observation import ObservationStore
 
-
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 

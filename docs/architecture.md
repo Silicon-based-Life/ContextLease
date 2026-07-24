@@ -1,6 +1,6 @@
 # Architecture
 
-ContextLease is a prompt-resource control plane. The host owns prompt semantics and supplies modules; the framework manages the shared token budget. There is no AINPC-, RAG-, or agent-framework-specific module in the core package.
+ContextLease is a prompt-resource control plane. The host owns prompt semantics and supplies modules; the framework manages the shared token budget. There is no host-application-specific module in the core package.
 
 ## Ownership boundary
 

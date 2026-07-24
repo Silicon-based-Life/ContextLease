@@ -9,10 +9,19 @@ and `CITATION.cff`.
 3. Run the full CI matrix on a pull request.
 4. Create and push the signed or annotated `vX.Y.Z` tag.
 5. The Release workflow builds the Python sdist plus Rust-bundled platform wheels,
-   the NuGet package, and native SDK ZIPs for Windows x86-64, Linux x86-64, and
-   macOS arm64. It then creates a
-   GitHub release with SHA-256 checksums.
+   the NuGet package with RID-native assets, and native SDK ZIPs for Windows
+   x86-64, Linux x86-64, and macOS arm64. It validates each artifact in an
+   isolated consumer, attests the public tagged build, and creates a GitHub
+   release with SHA-256 checksums.
 
 Registry publication is intentionally separate from GitHub release creation.
-Publish PyPI, NuGet, or crates.io packages only from a protected environment with
-reviewed tokens and after validating the downloaded release artifacts.
+Configure PyPI Trusted Publishing through GitHub OIDC and a protected deployment
+environment; do not add a long-lived PyPI token when OIDC is available. NuGet or
+crates.io publication must likewise run from a protected, reviewed environment
+after validating the downloaded GitHub release artifacts. Registry setup and the
+first publication are explicit maintainer/admin actions.
+
+The Go binding is a nested module at `bindings/go`. If it is published through the
+repository, use a matching subdirectory tag such as `bindings/go/v0.3.0`, only
+after its conformance job has passed. A root `v0.3.0` tag alone does not version
+the nested Go module for consumers.

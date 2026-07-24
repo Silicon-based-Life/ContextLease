@@ -7,7 +7,14 @@ from urllib.request import Request, urlopen
 
 from contextlease.debug import DebugServer
 from contextlease.errors import ConfigurationError
-from contextlease.models import ArenaDefinition, CompressionStepSpec, ModelProfile, ModuleContribution, ModuleDefinition, PromptChunk
+from contextlease.models import (
+    ArenaDefinition,
+    CompressionStepSpec,
+    ModelProfile,
+    ModuleContribution,
+    ModuleDefinition,
+    PromptChunk,
+)
 from contextlease.observation import ObservationStore
 from contextlease.runtime import ContextLeaseArena
 
@@ -22,7 +29,7 @@ def prepared_arena(store=None):
 class ObservationTests(unittest.TestCase):
     def test_ring_buffer_is_bounded_and_reports_drops(self):
         store = ObservationStore(max_events_per_arena=2)
-        arena = prepared_arena(store)
+        prepared_arena(store)
         snapshot = store.get_snapshot("debug-test")
         self.assertIsNotNone(snapshot)
         self.assertGreater(snapshot.health["events_dropped"], 0)
@@ -49,7 +56,8 @@ class DebugServerTests(unittest.TestCase):
 
     def test_health_and_arena_list(self):
         status, _, health = self.get("/api/v1/health")
-        self.assertEqual(status, 200); self.assertEqual(json.loads(health)["status"], "ok")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(health)["status"], "ok")
         _, _, arenas = self.get("/api/v1/arenas")
         self.assertEqual(json.loads(arenas)["items"][0]["arena_id"], "debug-test")
 
@@ -61,11 +69,13 @@ class DebugServerTests(unittest.TestCase):
     def test_modules_leases_and_events_endpoints(self):
         for path in ("modules", "leases", "events"):
             status, _, body = self.get(f"/api/v1/arenas/debug-test/{path}")
-            self.assertEqual(status, 200); self.assertIn("items", json.loads(body))
+            self.assertEqual(status, 200)
+            self.assertIn("items", json.loads(body))
 
     def test_static_page_has_security_headers(self):
         status, headers, body = self.get("/")
-        self.assertEqual(status, 200); self.assertIn("ContextLease", body)
+        self.assertEqual(status, 200)
+        self.assertIn("ContextLease", body)
         self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
 
     def test_sse_starts_with_existing_event(self):

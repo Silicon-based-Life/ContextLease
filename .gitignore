@@ -13,6 +13,7 @@ target/
 **/bin/
 **/obj/
 bindings/go/native/
+bindings/dotnet/src/ContextLease.Managed/runtimes/
 .env
 .DS_Store
 .idea/
