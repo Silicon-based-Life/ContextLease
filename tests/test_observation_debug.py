@@ -77,6 +77,10 @@ class DebugServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("ContextLease", body)
         self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        for path, expected_type in (("/app.css", "text/css"), ("/app.js", "text/javascript")):
+            asset_status, asset_headers, _ = self.get(path)
+            self.assertEqual(asset_status, 200)
+            self.assertEqual(asset_headers["Content-Type"].split(";", 1)[0], expected_type)
 
     def test_sse_starts_with_existing_event(self):
         with urlopen(f"{self.server.url}/api/v1/arenas/debug-test/stream", timeout=4) as response:
