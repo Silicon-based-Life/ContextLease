@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import mimetypes
 import sys
 import threading
 from http import HTTPStatus
@@ -16,6 +15,11 @@ from ..models import to_public_dict
 from ..observation import ObservationStore
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_STATIC_CONTENT_TYPES = {
+    "index.html": "text/html",
+    "app.css": "text/css",
+    "app.js": "text/javascript",
+}
 
 
 class DebugRequestHandler(BaseHTTPRequestHandler):
@@ -51,16 +55,15 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_static(self, name: str) -> None:
-        safe_name = name if name in {"index.html", "app.css", "app.js"} else "index.html"
+        safe_name = name if name in _STATIC_CONTENT_TYPES else "index.html"
         asset = resources.files("contextlease.debug.static").joinpath(safe_name)
         try:
             body = asset.read_bytes()
         except (FileNotFoundError, OSError):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "asset_not_found"})
             return
-        content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Type", f"{_STATIC_CONTENT_TYPES[safe_name]}; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
